@@ -1,0 +1,30 @@
+# Environment
+backend/.env
+frontend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Vector Database and processed chunks
+chroma_db/
+chunks/
+
+# Local data (keep for others to process)
+# data/  # Uncomment if you don't want to share the raw data

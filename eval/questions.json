@@ -1,0 +1,14 @@
+{
+  "questions": [
+    {
+      "id": 1,
+      "question": "维什戴尔的技能是什么？",
+      "expected_keywords": ["技能", "维什戴尔"]
+    },
+    {
+      "id": 2,
+      "question": "博士和阿米娅的关系？",
+      "expected_keywords": ["博士", "阿米娅", "关系"]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la \"C:\\\\Users\\\\66 user\\\\.claude\\\\projects\\\\c--Users-66-user-Desktop-RAG-ARKNIGHTS\\\\memory\"\" 2>/dev/null || echo \"Directory not found \")",
+      "Bash(curl -s http://localhost:8000/stats)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\66 user\\.claude"
+    ]
+  }
+}
