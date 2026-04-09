@@ -5,6 +5,7 @@ import config
 from backend.api.siliconflow import SiliconFlowClient
 from backend.storage.chroma_client import ChromaClientWrapper
 from backend.data.bm25_index import BM25Indexer
+from backend.rag.query_rewriter import clear_rewrite_cache
 
 class IndexManager:
     def __init__(self, api_key: str = None):
@@ -14,6 +15,9 @@ class IndexManager:
 
     def build_all_indexes(self, force: bool = False):
         """Build Chroma indexes for all 3 collections by embedding chunk texts."""
+        # Clear query rewrite cache when rebuilding indexes
+        clear_rewrite_cache()
+
         collections = ['operators', 'stories', 'knowledge']
 
         for coll_name in collections:

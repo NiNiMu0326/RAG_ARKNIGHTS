@@ -1,468 +1,268 @@
 # 明日方舟 RAG 助手
 
-基于明日方舟数据集的智能问答助手，支持干员查询、剧情搜索、游戏攻略、梗百科等多种检索场景。
+基于明日方舟数据集的智能问答助手，支持干员查询、剧情搜索、游戏攻略等检索场景。
 
 ## 功能特性
 
-- 🔍 **多路召回**：向量 + BM25 混合检索
-- 🎯 **Cross-Encoder Rerank**：精排 Top-5
-- 🔄 **CRAG**：自适应检索策略（网络搜索自动补足低相关场景）
-- 🕸️ **GraphRAG**：知识图谱关系查询 + 可视化
-- 💬 **查询分解**：多实体问题分解并行召回
-- 📄 **Parent Document**：检索完整干员/剧情原文
-- 📊 **管理面板**：索引管理 / RAG 调试 / 参数对比 / LLM 评估
-- 🌐 **流式输出**：SSE 实时响应，显示 RAG 执行步骤
-- 🎨 **战术指挥中心界面**：明日方舟主题深色科技感设计
+- **多路召回**：向量 + BM25 混合检索 + 标准 RRF 融合
+- **Cross-Encoder Rerank**：BAAI/bge-reranker-v2-m3 精排
+- **CRAG**：自适应检索策略（HIGH/LOW 二分类，网络搜索自动补足）
+- **GraphRAG**：知识图谱关系查询（无需 LLM 判断）
+- **查询改写**：fast_rule 快速匹配 + Qwen LLM 精判
+- **Parent Document**：检索完整干员/剧情原文
+- **Pipeline 详情**：显示 RAG 执行步骤及耗时
+- **动态问题**：从真实数据生成随机问题按钮
 
 ## 系统要求
 
-- **操作系统**：Windows 10/11、macOS 10.15+ 或 Linux（Ubuntu 20.04+ 推荐）
-- **Python**：3.11 或更高版本（推荐使用 Anaconda/Miniconda）
+- **操作系统**：Windows 10/11、macOS 10.15+ 或 Linux
+- **Python**：3.11+
 - **内存**：至少 8 GB RAM（推荐 16 GB）
-- **磁盘空间**：至少 2 GB 可用空间
 
-## 📦 安装指南
+## 安装
 
-### 1. 获取代码
+### 1. 克隆代码
 
 ```bash
-# 克隆仓库
-git clone https://github.com/your-username/RAG_ARKNIGHTS.git
+git clone <repo-url>
 cd RAG_ARKNIGHTS
 ```
 
-### 2. 安装 Miniconda（如未安装）
-
-#### Windows
-1. 下载 Miniconda 安装程序：https://docs.conda.io/en/latest/miniconda.html
-2. 运行安装程序，按默认设置安装
-3. 打开 "Anaconda Prompt"（开始菜单中搜索）
-
-#### macOS/Linux
-```bash
-# 下载安装脚本
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-# 或
-curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-
-# 运行安装
-bash Miniconda3-latest-Linux-x86_64.sh
-# 按照提示操作，安装完成后重启终端
-```
-
-### 3. 创建 Python 环境
+### 2. 创建 Python 环境
 
 ```bash
-# 创建名为 arknights-rag 的 Python 3.11 环境
 conda create -n arknights-rag python=3.11 -y
-
-# 激活环境
 conda activate arknights-rag
 ```
 
-### 4. 安装后端依赖
+### 3. 安装后端依赖
 
 ```bash
-# 进入后端目录
 cd backend
-
-# 安装 Python 依赖包
 pip install -r requirements.txt
 ```
 
-> **注意**：安装可能需要几分钟，具体时间取决于网络速度和系统性能。
-
-## ⚙️ 配置
-
-### 1. 配置 API Keys
-
-项目需要以下 API Key（至少需要 SiliconFlow API Key）：
-
-1. **SiliconFlow API Key**（必需）
-   - 访问 https://siliconflow.cn 注册账号
-   - 在控制台创建 API Key
-   - 免费额度足够测试使用
-
-2. **Tavily API Key**（可选，用于网络搜索功能）
-   - 访问 https://tavily.com 注册账号
-   - 获取 API Key
-   - 如果不配置，网络搜索功能将不可用
-
-### 2. 设置环境变量
+### 4. 配置 API Keys
 
 ```bash
-# 复制环境变量模板
 cp .env.example .env
-
-# 编辑 .env 文件，填入你的 API Key
-# 可以使用文本编辑器（如 nano、vim、记事本等）
+# 编辑 .env 填入 API Key
 ```
 
-`.env` 文件内容示例：
-```env
-# SiliconFlow API Key (required)
-SILICONFLOW_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+必需：
+- **SiliconFlow API Key** - 向量嵌入 + 重排 + 查询改写（[siliconflow.cn](https://siliconflow.cn)）
+- **DeepSeek API Key** - LLM 对话（[deepseek.com](https://deepseek.com)）
 
-# Tavily API Key for internet search (optional)
-TAVILY_API_KEY=tvly-dev-xxxxxxxxxxxxxxxxxxxxxxxx
+可选：
+- **Tavily API Key** - 网络搜索补充（[tavily.com](https://tavily.com)）
 
-# Server Port (optional, defaults to 8000)
-PORT=8000
-```
+## 数据处理
 
-## 📊 数据处理
+### 文本切块策略
 
-本项目提供完整的原始数据文件（`data/`目录），但处理后的中间文件（`chunks/`和`chroma_db/`）需要用户自行生成。这样做可以显著减小仓库体积，并让用户了解完整的数据处理流程。
+- **实时分割合并算法**：处理每个段落时立即检查合并条件，避免过度分割
+- **干员/敌人数据**：每个干员/敌人一个完整 chunk（无大小限制）
+- **剧情/知识数据**：min_size=1500字符，target_size=4000字符，max_size=6000字符
+- **标题处理**：每个 chunk 开头添加干员/剧情标题
+- **Markdown 分段**：按 `##` 标题分割，超大章节递归拆分
 
-### 1. 生成文本切块（chunks/）
+### 构建索引
 
 ```bash
-# 确保在项目根目录，并已激活 conda 环境
-conda activate arknights-rag
-
-# 运行文本切块程序
+# 1. 生成文本切块（自动处理重复标题和微小 chunk 合并）
 python backend/data/chunker.py
-```
-这将读取 `data/` 目录下的原始文件，生成 `chunks/` 目录。处理时间约为 1-2 分钟。
 
-### 2. 生成 BM25 索引
-
-```bash
-# 运行 BM25 索引构建
+# 2. 生成 BM25 索引（保存为 chunks/*_bm25.pkl）
 python backend/data/bm25_index.py
+
+# 3. 生成向量数据库（需要 SiliconFlow API，强制重建所有索引）
+python -c "
+from backend.storage.index_manager import IndexManager
+from backend.data.bm25_index import build_all_bm25_indexes
+
+print('=== Building BM25 indexes ===')
+build_all_bm25_indexes()
+
+print('=== Building vector indexes ===')
+manager = IndexManager()
+manager.build_all_indexes(force=True)
+"
 ```
-这会为 `chunks/` 中的三个集合（operators, stories, knowledge）分别构建 BM25 索引，保存为 `.pkl` 文件。
 
-### 3. 生成向量数据库索引（chroma_db/）
+## 启动服务
 
-> **注意**：此步骤需要有效的 SiliconFlow API Key，并会产生 API 调用费用（免费额度充足）。
+### 后端
 
 ```bash
-# 运行 ChromaDB 索引构建
-python backend/storage/index_manager.py
-```
-程序会提示确认，输入 `y` 继续。此步骤会：
-- 读取 `chunks/` 目录中的所有文本
-- 通过 SiliconFlow API 生成文本嵌入向量
-- 构建向量数据库索引到 `chroma_db/` 目录
-- 处理约 13,000 个文本块，需要几分钟时间
-
-### 数据处理注意事项
-1. **首次运行**：建议按顺序执行上述三个步骤
-2. **重新生成**：如果修改了原始数据，需要重新执行所有步骤
-3. **磁盘空间**：完整处理需要约 300MB 额外空间
-4. **API 费用**：步骤3会消耗 SiliconFlow API 调用次数，但免费额度足够多次使用
-
-## 🚀 启动服务
-
-### 1. 启动后端服务
-
-```bash
-# 确保在 backend 目录中
 cd backend
-
-# 激活 conda 环境（如果尚未激活）
-conda activate arknights-rag
-
-# 启动 FastAPI 服务
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-正常启动后，终端将显示：
-```
-INFO:     Started server process [PID]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-```
+### 前端
 
-### 2. 启动前端服务（两种方式）
-
-#### 方式一：使用预构建的静态文件（最简单，无需 Node.js）
-项目已包含预构建的前端文件，可以直接使用：
 ```bash
-# 打开新的终端窗口，切换到项目根目录
+cd frontend
+npm install
+npm run dev
+```
+
+访问 http://localhost:5173
+
+## Docker 部署
+
+### 环境要求
+
+- Ubuntu 20.04+ (64位)
+- Docker & Docker Compose
+- 2GB+ 内存
+
+### 快速部署
+
+```bash
+# 1. 克隆项目
+git clone <repo-url>
 cd RAG_ARKNIGHTS
 
-# 启动 HTTP 服务器（端口 8080），服务构建好的前端文件
-python -m http.server 8080 --directory frontend/dist
+# 2. 配置环境变量
+cp backend/.env.example backend/.env
+# 编辑 .env 填入 API Keys
+
+# 3. 构建并启动
+docker-compose up -d --build
+
+# 4. 访问
+# 前端界面: http://服务器IP:8000
+# API 文档: http://服务器IP:8000/docs
 ```
 
-> **注意**：预构建文件使用默认的 `http://localhost:8000` 作为后端地址。如需更改，请使用方式二。
+### 常用命令
 
-#### 方式二：使用 Node.js 开发服务器（推荐用于开发）
 ```bash
-# 进入前端目录
-cd frontend
+# 查看容器状态
+docker-compose ps
 
-# 安装依赖（首次运行）
-npm install
+# 查看日志
+docker-compose logs -f
 
-# 启动开发服务器
-npm run dev
-```
-开发服务器将在 `http://localhost:5173` 启动，并支持热重载。
+# 重启服务
+docker-compose restart
 
-### 3. 配置前端 API 地址
-
-前端默认连接 `http://localhost:8000` 的后端。如需更改，有以下几种方式：
-
-#### 方法A：使用环境变量（推荐）
-1. **创建环境文件**：
-   ```bash
-   cd frontend
-   cp .env.example .env
-   ```
-
-2. **编辑 `.env` 文件**，修改 `VITE_API_BASE`：
-   ```env
-   # 例如，如果后端运行在 192.168.1.100:8000
-   VITE_API_BASE=http://192.168.1.100:8000
-   ```
-
-3. **应用配置**：
-   - **开发模式** (`npm run dev`)：环境变量自动生效
-   - **生产构建**：重新构建以应用新配置：
-     ```bash
-     cd frontend
-     npm run build  # 构建到 dist/ 目录
-     ```
-
-#### 方法B：直接修改源码（不推荐，仅用于快速测试）
-修改 `frontend/src/api.js` 和 `frontend/src/api/index.js` 中的 `API_BASE` 变量。
-
-#### 配置示例
-
-**场景1：本地开发，后端在默认端口**
-- 无需任何配置，直接使用默认值
-
-**场景2：后端在另一台服务器**
-```bash
-# 1. 创建环境文件
-cd frontend
-cp .env.example .env
-
-# 2. 编辑 .env，例如：
-# VITE_API_BASE=http://192.168.1.100:8000
-
-# 3A. 开发模式：直接运行
-npm run dev
-
-# 3B. 生产模式：构建后使用
-npm run build
-python -m http.server 8080 --directory dist
+# 停止服务
+docker-compose down
 ```
 
-**场景3：使用 Docker 或容器化部署**
-```env
-# .env 文件内容
-VITE_API_BASE=http://backend:8000  # Docker 容器名
+## RAG 流程（8 步）
 
-## 🌐 访问应用
+1. **查询改写** - fast_rule 快速匹配 + Qwen LLM 精判（判断是否检索、分解复杂问题）
+2. **多路召回** - 并行 BM25 + 向量搜索，RRF 融合（operators/stories/knowledge 三个 collection）
+3. **GraphRAG 查询**（与召回并行）- 知识图谱查询，用于实体关系问题
+4. **Cross-Encoder 重排** - BAAI/bge-reranker-v2-m3
+5. **CRAG 判断** - HIGH/LOW 二分类（低于阈值触发网络搜索）
+6. **Parent Document** - 扩展为完整干员/剧情原文
+7. **网络搜索** - CRAG LOW 时 Tavily 补充
+8. **答案生成** - DeepSeek-V3 生成最终回答
 
-启动成功后，可以通过以下地址访问：
+## 参数配置
 
-- **前端界面**：http://localhost:8080
-- **后端 API**：http://localhost:8000
-- **API 文档**：http://localhost:8000/docs（自动生成的 Swagger UI）
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `top_k_per_channel` | 8 | 每库召回数量 |
+| `rerank_top_k` | 5 | 重排输出数量 |
+| `vector_weight` | 0.5 | 向量/BM25 权重 |
+| `inner_top_k` | 20 | 内部搜索数量 |
 
-### 验证服务状态
-
-打开浏览器访问 http://localhost:8000，应该看到：
-```json
-{"message": "Arknights RAG API", "version": "1.0.0"}
-```
-
-## 📁 项目结构
+## 项目结构
 
 ```
 RAG_ARKNIGHTS/
-├── backend/                    # FastAPI 后端服务
-│   ├── main.py                # FastAPI 主应用
-│   ├── config.py              # 配置文件（路径设置）
-│   ├── requirements.txt       # Python 依赖列表
-│   ├── .env.example           # 环境变量示例
-│   ├── rag/                   # RAG 核心模块
-│   │   ├── orchestrator.py    # RAG 流程编排器
-│   │   ├── multi_channel_recall.py  # 多路召回
-│   │   ├── reranker.py        # 交叉编码器重排
-│   │   ├── crag.py            # CRAG 判断模块
-│   │   ├── answer_generator.py # 答案生成器
-│   │   ├── graphrag/          # GraphRAG 知识图谱
-│   │   └── parent_document.py # Parent Document 检索
-│   ├── api/                   # 外部 API 客户端
-│   │   └── siliconflow.py     # SiliconFlow API 封装
-│   ├── storage/               # 数据存储
-│   │   ├── chroma_client.py   # ChromaDB 客户端
+├── backend/
+│   ├── main.py              # FastAPI 主应用
+│   ├── config.py            # 配置（API Keys、模型参数）
+│   ├── requirements.txt     # Python 依赖
+│   ├── api/
+│   │   ├── siliconflow.py   # SiliconFlow API（嵌入 + 重排 + 查询改写）
+│   │   └── deepseek.py      # DeepSeek API（LLM 对话）
+│   ├── rag/
+│   │   ├── orchestrator.py    # RAG 流程编排（单例模式）
+│   │   ├── query_rewriter.py  # 查询改写（fast_rule + Qwen）
+│   │   ├── multi_channel_recall.py  # 多路召回（ThreadPoolExecutor 并发）
+│   │   ├── hybrid_search.py   # 混合搜索（向量 + BM25 + 标准 RRF）
+│   │   ├── reranker.py        # Cross-Encoder 重排
+│   │   ├── crag.py            # CRAG 判断（HIGH/LOW 二分类）
+│   │   ├── answer_generator.py # 答案生成（DeepSeek）
+│   │   ├── parent_document.py  # Parent Document 扩展（LRU 缓存）
+│   │   └── graphrag/          # 知识图谱
+│   │       ├── builder.py     # 图谱构建（NetworkX）
+│   │       └── query.py       # 图谱查询（无 LLM）
+│   ├── storage/
+│   │   ├── chroma_client.py   # ChromaDB 封装
 │   │   └── index_manager.py   # 索引管理
-│   ├── data/                  # 数据处理模块
-│   │   ├── bm25_index.py      # BM25 索引
-│   │   ├── chunker.py         # 文本切块
-│   │   ├── loader.py          # 数据加载
-│   │   └── operators_summary.py # 干员摘要处理
-│   └── tests/                 # 单元测试
-├── frontend/                  # Vue.js 前端界面
-│   ├── index.html             # 主页面
-│   ├── package.json           # Node.js 依赖
-│   ├── vite.config.js         # Vite 配置
-│   ├── src/                   # 源代码
-│   │   ├── main.js            # Vue 应用入口
-│   │   ├── App.vue            # 根组件
-│   │   ├── views/             # 页面组件
-│   │   ├── components/        # 通用组件
-│   │   ├── stores/            # Pinia 状态管理
-│   │   ├── router/            # 路由配置
-│   │   ├── api/               # API 客户端
-│   │   └── utils/             # 工具函数
-│   └── dist/                  # 构建输出（预构建）
-├── data/                      # 原始数据文件（已包含）
-│   ├── operators/             # 干员数据
-│   ├── stories/               # 剧情数据
-│   ├── knowledge/             # 游戏知识
-│   ├── all_operators.json     # 所有干员列表
-│   └── char_summary.md        # 角色摘要
-├── chunks/                    # 文本切块数据（需通过数据处理生成）
-│   ├── operators/             # 干员切块
-│   ├── stories/               # 剧情切块
-│   └── knowledge/             # 知识切块
-├── chroma_db/                 # ChromaDB 向量数据库（需通过数据处理生成）
-├── eval/                      # 评估模块
-│   ├── rag_eval.py            # RAG 评估器
-│   └── questions.json         # 评估问题集
-├── .gitignore                 # Git 忽略文件
-└── README.md                  # 项目说明
+│   └── data/
+│       ├── bm25_index.py      # BM25 索引
+│       └── chunker.py        # 文本切块
+├── frontend/
+│   └── src/
+│       ├── views/
+│       │   ├── ChatView.vue   # 问答界面
+│       │   ├── AdminView.vue  # 管理面板（调试、评估）
+│       │   └── GraphView.vue  # 知识图谱可视化
+│       ├── stores/            # Pinia 状态
+│       │   ├── sessions.js    # 会话管理
+│       │   ├── settings.js    # 设置（CRAG/GraphRAG/ParentDoc）
+│       │   └── quickQuestions.js  # 动态问题
+│       └── api.js             # API 客户端
+├── data/                     # 原始数据
+├── chunks/                   # 文本切块
+├── chroma_db/                # 向量数据库
+└── eval/
+    └── rag_eval.py           # RAG 评估
 ```
 
-## 🔧 API 接口
+## API 端点
 
-### 核心问答接口
-- `POST /query` - 执行 RAG 查询，返回答案和元数据
-- `POST /query/stream` - 流式查询（SSE 事件流）
-- `POST /debug/step` - 分步调试 RAG 流程
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| GET | `/` | 服务状态 |
+| GET | `/health` | 健康检查 |
+| POST | `/query` | RAG 查询 |
+| POST | `/debug/step` | 单步调试（1-8） |
+| GET | `/chunks/{collection}` | 列出切块 |
+| GET | `/chunks/{collection}/{filename}` | 获取切块内容 |
+| GET | `/graph` | 知识图谱数据 |
+| GET | `/stats` | 统计信息 |
+| GET | `/operators` | 干员列表 |
+| GET | `/characters` | 角色列表 |
+| GET | `/stories` | 故事列表 |
+| GET | `/eval` | 运行评估 |
 
-### 数据管理接口
-- `GET /chunks/{collection}` - 列出指定集合的 chunk 文件
-- `GET /chunks/{collection}/{filename}` - 获取 chunk 内容
-- `GET /graph` - 获取知识图谱数据
-- `GET /stats` - 获取系统统计信息
-- `GET /operators` - 获取所有干员名列表
-- `GET /characters` - 获取所有角色名列表
-- `GET /stories` - 获取所有故事名列表
+## 前端功能
 
-### 评估接口
-- `GET /eval` - 运行 RAG 评估
+- **问答界面**：支持多会话、检索结果展示、pipeline 详情
+- **管理面板**：单步调试、参数配置、评估对比
+- **知识图谱**：实体关系可视化
 
-## 🔍 使用示例
+## 技术栈
 
-### 1. 基本问答
-在聊天界面输入问题，例如：
-- "银灰的技能是什么？"
-- "阿米娅和博士是什么关系？"
-- "明日方舟有哪些六星干员？"
+| 组件 | 技术 |
+|------|------|
+| 后端框架 | FastAPI + Uvicorn |
+| 向量数据库 | ChromaDB |
+| 嵌入模型 | BAAI/bge-m3 (SiliconFlow) |
+| 重排模型 | BAAI/bge-reranker-v2-m3 (SiliconFlow) |
+| 查询改写 | Qwen/Qwen2.5-7B-Instruct (SiliconFlow) |
+| 答案生成 | deepseek-chat (DeepSeek API) |
+| 网络搜索 | Tavily |
+| 前端 | Vue.js 3 + Vite + Pinia |
+| 图谱可视化 | Cytoscape.js |
 
-### 2. 调试模式
-点击"调试模式"按钮，可以：
-- 查看 RAG 流程的每个步骤
-- 检查召回文档的内容
-- 分析 CRAG 判断结果
-- 观察知识图谱查询结果
+## 缓存策略
 
-### 3. 管理后台
-访问管理面板可以：
-- 查看系统统计信息
-- 浏览向量数据库内容
-- 运行 RAG 评估测试
-- 调整检索参数
+- **QueryRewriter**：5 小时 TTL，缓存 LLM 改写结果
+- **Multi-Channel Recall**：5 小时 TTL
+- **Hybrid Search**：5 小时 TTL，缓存 key 包含 vector_weight 和 inner_top_k
+- **Parent Document**：LRU 缓存（max 100 条，5 小时 TTL）
+- **BM25 索引**：懒加载，首次召回时构建
 
-## 🐛 故障排除
+## 许可证
 
-### 常见问题
-
-#### 1. 后端启动失败
-- **错误**：`ModuleNotFoundError: No module named 'fastapi'`
-- **解决**：确保已激活 conda 环境并安装依赖：`pip install -r requirements.txt`
-
-#### 2. 前端无法连接后端
-- **现象**：前端显示"连接失败"或一直加载
-- **解决**：
-  1. 检查后端是否正常运行：访问 http://localhost:8000
-  2. 检查前端 `API_BASE` 设置是否匹配后端地址
-  3. 检查防火墙设置，确保端口 8000 和 8080 开放
-
-#### 3. API Key 错误
-- **错误**：`Invalid API Key` 或 `Authentication failed`
-- **解决**：
-  1. 检查 `.env` 文件中的 `SILICONFLOW_API_KEY` 是否正确
-  2. 确认 API Key 是否有效（在 SiliconFlow 控制台验证）
-  3. 确保 `.env` 文件在 `backend` 目录中
-
-#### 4. 内存不足
-- **现象**：程序运行缓慢或崩溃
-- **解决**：
-  1. 关闭不必要的应用程序
-  2. 减少检索参数（如 `top_k` 值）
-  3. 考虑升级系统内存
-
-### 日志查看
-
-#### 后端日志
-```bash
-# 查看后端输出（如果直接运行）
-# 日志显示在启动后端服务的终端中
-
-# 如果使用 nohup 后台运行
-tail -f backend.log
-```
-
-#### 前端日志
-- 浏览器开发者工具（F12）→ Console 标签页
-- 查看网络请求和错误信息
-
-## 📚 技术栈
-
-### 后端技术
-- **框架**：FastAPI + Uvicorn
-- **向量数据库**：ChromaDB
-- **检索算法**：BM25 + 向量相似度
-- **重排序**：BAAI/bge-reranker-v2-m3
-- **嵌入模型**：BAAI/bge-m3
-- **LLM**：DeepSeek-V3（通过 SiliconFlow）
-- **数据处理**：Pandas, NumPy, scikit-learn
-
-### 前端技术
-- **框架**：Vue.js 3 + Composition API
-- **状态管理**：Pinia
-- **路由**：Vue Router
-- **构建工具**：Vite
-- **可视化**：Cytoscape.js（知识图谱）
-- **样式**：CSS3 + 自定义明日方舟主题
-
-### 开发工具
-- **版本控制**：Git
-- **环境管理**：Miniconda
-- **包管理**：pip + npm
-- **API 文档**：Swagger UI（自动生成）
-
-## 🤝 贡献指南
-
-欢迎提交 Issue 和 Pull Request！
-
-1. Fork 本仓库
-2. 创建特性分支：`git checkout -b feature/amazing-feature`
-3. 提交更改：`git commit -m 'Add amazing feature'`
-4. 推送到分支：`git push origin feature/amazing-feature`
-5. 开启 Pull Request
-
-## 📄 许可证
-
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
-
-## 🙏 致谢
-
-- 感谢明日方舟游戏开发团队提供丰富的游戏内容
-- 感谢 SiliconFlow 提供优质的 LLM API 服务
-- 感谢所有开源项目的贡献者
-
----
-
-**提示**：本项目仅供学习和研究使用。游戏内容版权属于上海鹰角网络科技有限公司。
+MIT License

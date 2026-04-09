@@ -2,9 +2,10 @@
    ARKNIGHTS RAG - API CLIENT (Vue version)
    ================================================ */
 
-// API base URL - can be configured via environment variable VITE_API_BASE
-// Default to localhost:8000 if not set
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+// API base URL - using relative path for Vite proxy
+// For development, requests are proxied to http://localhost:8888
+// For production, set VITE_API_BASE environment variable
+const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 export const api = {
   async query(question, options = {}, signal = null) {
@@ -20,6 +21,8 @@ export const api = {
     if (!response.ok) throw new Error('Query failed')
     return response.json()
   },
+
+
 
   async getStatus() {
     const response = await fetch(`${API_BASE}/status`)

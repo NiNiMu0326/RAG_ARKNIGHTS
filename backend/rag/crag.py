@@ -3,23 +3,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from typing import List, Dict, Tuple
 from dataclasses import dataclass
+import config
 
 
 @dataclass
 class CRAGStrategy:
-    level: str  # HIGH, MEDIUM, LOW
+    level: str  # HIGH, LOW
     avg_score: float
     should_search_web: bool
     should_use_docs: bool
-    num_low_score_docs: int  # Number of docs below threshold
-    web_search_count: int  # How many web results to search (N*2)
+    num_low_score_docs: int
+    web_search_count: int
     reasoning: str
 
 
 class CRAGJudge:
     def __init__(self):
-        self.high_threshold = 0.7  # Average score threshold for HIGH
-        self.doc_threshold = 0.4   # Per-document threshold
+        self.high_threshold = getattr(config, 'CRAG_HIGH_THRESHOLD', 0.6)
+        self.doc_threshold = getattr(config, 'CRAG_LOW_THRESHOLD', 0.4)
 
     def judge(self, reranked_results: List[Dict]) -> CRAGStrategy:
         """Judge the quality of retrieval results.
@@ -49,9 +50,8 @@ class CRAGJudge:
         low_score_docs = [s for s in scores if s < self.doc_threshold]
         num_low = len(low_score_docs)
 
-        # Determine level based on average score
+        # Two-level classification: HIGH (>=0.6) or LOW (<0.6)
         if avg_score >= self.high_threshold:
-            # HIGH: Even if some low docs exist, high average means overall relevant
             return CRAGStrategy(
                 level='HIGH',
                 avg_score=avg_score,
@@ -59,24 +59,18 @@ class CRAGJudge:
                 should_use_docs=True,
                 num_low_score_docs=num_low,
                 web_search_count=0,
-                reasoning=f"HIGH: avg_score={avg_score:.3f} >= 0.7, using all local docs"
+                reasoning=f"HIGH: avg_score={avg_score:.3f} >= 0.6, using local docs only"
             )
 
-        # MEDIUM or LOW: Need to supplement with web search
-        if avg_score < 0.4:
-            level = 'LOW'
-        else:
-            level = 'MEDIUM'
-
-        # N = number of docs below threshold, search N*2
+        # LOW: Need to supplement with web search
         web_count = num_low * 2
 
         return CRAGStrategy(
-            level=level,
+            level='LOW',
             avg_score=avg_score,
             should_search_web=True,
             should_use_docs=True,
             num_low_score_docs=num_low,
             web_search_count=web_count,
-            reasoning=f"{level}: avg_score={avg_score:.3f}, {num_low} docs below {self.doc_threshold}, will search {web_count} web results"
+            reasoning=f"LOW: avg_score={avg_score:.3f}, {num_low} docs below {self.doc_threshold}, will search {web_count} web results"
         )

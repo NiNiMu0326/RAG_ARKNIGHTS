@@ -91,7 +91,9 @@ const nodeStyles = [
 const edgeStyles = [
   { selector: 'edge', style: { 'width': 2, 'line-color': '#3a3a5a', 'target-arrow-color': '#3a3a5a', 'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'opacity': 0.4 } },
   { selector: 'edge.highlighted', style: { 'width': 3, 'opacity': 1, 'z-index': 5 } },
-  { selector: 'edge.selected-relation', style: { 'width': 4, 'opacity': 1, 'z-index': 10, 'line-color': '#ffd700' } }
+  { selector: 'edge.selected-relation', style: { 'width': 4, 'opacity': 1, 'z-index': 10, 'line-color': '#ffd700' } },
+  { selector: 'edge.relation-hovered', style: { 'width': 4, 'opacity': 1, 'z-index': 15 } },
+  { selector: 'edge.relation-dimmed', style: { 'opacity': 0.08 } }
 ]
 
 // ============ Init ============
@@ -160,6 +162,7 @@ function updateGraph() {
   // Show empty state if no selection
   if (selectedNodes.value.length === 0) {
     cy.elements().remove()
+    controller.updateCurrentStats(0, 0)
     return
   }
 
@@ -186,6 +189,8 @@ function updateGraph() {
 
     applyNodeStyles()
     applyEdgeStyles()
+    applyEdgeHoverStyles()
+    controller.updateCurrentStats(subgraph.nodes.length, subgraph.edges.length)
   }
 
   selectedEdge.value = null
@@ -196,6 +201,7 @@ function buildSubgraph() {
   const nodes = new Map()
   const edges = []
   const allNeighborIds = new Set()
+  const relationFilter = selectedRelations.value.length > 0 ? new Set(selectedRelations.value) : null
 
   for (let level = 0; level < neighborLevel.value; level++) {
     const currentLevelNodes = level === 0 ? new Set(selectedNodes.value) : allNeighborIds
@@ -203,6 +209,9 @@ function buildSubgraph() {
 
     currentLevelNodes.forEach(nodeId => {
       ;(graphData.value.relations || []).forEach(r => {
+        // Skip if relation filter is active and this relation is not selected
+        if (relationFilter && !relationFilter.has(r.relation)) return
+
         if (r.source === nodeId) {
           nextLevelNodes.add(r.target)
           edges.push({
@@ -246,11 +255,23 @@ function buildSubgraph() {
     }
   })
 
+  // If relation filter active, remove orphaned nodes (not connected to selected nodes via allowed relations)
+  let finalNodeIds = allNeighborIds
+  if (relationFilter) {
+    const selectedSet = new Set(selectedNodes.value)
+    const connectedNodes = new Set(selectedNodes.value)
+    uniqueEdges.forEach(e => {
+      connectedNodes.add(e.data.source)
+      connectedNodes.add(e.data.target)
+    })
+    finalNodeIds = connectedNodes
+  }
+
   // Build nodes
-  allNeighborIds.forEach(nodeId => {
+  finalNodeIds.forEach(nodeId => {
     const entity = graphData.value.entities.find(e => e.entity === nodeId)
-    const connections = (graphData.value.relations || []).filter(
-      r => r.source === nodeId || r.target === nodeId
+    const connections = uniqueEdges.filter(
+      r => r.data.source === nodeId || r.data.target === nodeId
     ).length
     const size = Math.min(60, Math.max(30, 25 + connections * 3))
 
@@ -315,6 +336,24 @@ function applyEdgeStyles() {
   })
 }
 
+function applyEdgeHoverStyles() {
+  if (!cy) return
+  const { hoveredRelation, relationColors } = controller
+
+  cy.edges().forEach(edge => {
+    edge.removeClass('relation-hovered relation-dimmed')
+    if (!hoveredRelation.value) return
+
+    const relation = edge.data('relation')
+    if (relation === hoveredRelation.value) {
+      edge.addClass('relation-hovered')
+      edge.style('line-color', relationColors[relation] || '#00e5cc')
+    } else {
+      edge.addClass('relation-dimmed')
+    }
+  })
+}
+
 // ============ Zoom ============
 function zoomIn() {
   if (cy) {
@@ -355,9 +394,10 @@ onUnmounted(() => {
 watch(() => controller.selectedNodes.value, (newVal) => {
   console.log('GraphView watch triggered, selectedNodes:', [...newVal])
   updateGraph()
-}, { deep: true })
+})  // No deep: true needed - selectedNodes uses array replacement, not in-place mutation
 watch(() => controller.neighborLevel.value, updateGraph)
-watch(() => controller.selectedRelations.value, updateGraph, { deep: true })
+watch(() => controller.selectedRelations.value, updateGraph, { deep: true })  // Needs deep: true - uses .splice()/.push()
+watch(() => controller.hoveredRelation.value, applyEdgeHoverStyles)
 </script>
 
 <style scoped>

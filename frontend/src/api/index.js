@@ -1,6 +1,6 @@
 // API base URL - can be configured via environment variable VITE_API_BASE
-// Default to localhost:8000 if not set
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+// Default to empty string (use relative path for Vite proxy)
+const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 export const api = {
   async query(question, options = {}) {

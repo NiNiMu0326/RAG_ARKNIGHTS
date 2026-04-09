@@ -27,7 +27,7 @@
 
     <!-- Graph Controls - Only show on /graph route -->
     <div class="sidebar-graph-controls" v-if="showGraphControls">
-      <!-- Search Section -->
+      <!-- Search and Selected Nodes -->
       <div class="sidebar-section">
         <div class="sidebar-section-title">搜索节点</div>
         <div class="kg-search-box">
@@ -40,34 +40,19 @@
             <div v-if="gc.searchResults.value.length === 0" class="kg-search-result-item kg-no-results">无结果</div>
           </div>
         </div>
-      </div>
-
-      <!-- Selected Nodes Section -->
-      <div class="sidebar-section">
-        <div class="sidebar-section-title">
-          已选节点
-          <span class="kg-selected-count">{{ gc.selectedNodes.value.length }}</span>
-        </div>
-        <div class="kg-selected-nodes">
-          <div v-if="gc.selectedNodes.value.length === 0" class="kg-empty-hint">点击图上节点或搜索添加</div>
-          <div v-else>
-            <div v-for="nodeId in gc.selectedNodes.value" :key="nodeId" class="kg-selected-node">
-              <span class="kg-selected-node-name">{{ nodeId }}</span>
-              <button class="kg-selected-node-remove" @click="gc.removeNodeSelection(nodeId)">X</button>
-            </div>
+        <div class="kg-selected-nodes" v-if="gc.selectedNodes.value.length > 0">
+          <div class="kg-selected-header">
+            <span>已选</span>
+            <span class="kg-selected-count">{{ gc.selectedNodes.value.length }}</span>
+          </div>
+          <div v-for="nodeId in gc.selectedNodes.value" :key="nodeId" class="kg-selected-node">
+            <span class="kg-selected-node-name">{{ nodeId }}</span>
+            <button class="kg-selected-node-remove" @click="gc.removeNodeSelection(nodeId)">X</button>
           </div>
         </div>
-      </div>
-
-      <!-- Graph Stats -->
-      <div class="sidebar-section kg-stats">
-        <div class="kg-stat-item">
-          <span class="kg-stat-label">节点</span>
-          <span class="kg-stat-value">{{ gc.stats.nodes }}</span>
-        </div>
-        <div class="kg-stat-item">
-          <span class="kg-stat-label">边</span>
-          <span class="kg-stat-value">{{ gc.stats.edges }}</span>
+        <div class="kg-stats-inline">
+          <span>节点 <span class="kg-stat-num">{{ gc.currentStats.nodes }}</span></span>
+          <span>边 <span class="kg-stat-num">{{ gc.currentStats.edges }}</span></span>
         </div>
       </div>
 
@@ -81,21 +66,19 @@
       </div>
 
       <!-- Relation Type Filter -->
-      <div class="sidebar-section">
+      <div class="sidebar-section" v-if="gc.availableRelations.value.length">
         <div class="sidebar-section-title">关系类型筛选</div>
-        <div class="kg-rel-search-box">
-          <input type="text" v-model="gc.relSearchQuery.value" placeholder="搜索关系类型..." @input="gc.handleRelSearch(gc.relSearchQuery.value)" @focus="gc.onRelSearchFocus" @blur="gc.onRelSearchBlur">
-          <div class="kg-rel-search-results" v-show="gc.relSearchFocused.value || gc.relSearchResults.value.length">
-            <div v-for="rel in gc.relSearchResults.value" :key="rel" class="kg-rel-search-item" :class="{ active: gc.selectedRelations.value.includes(rel) }" @mousedown="gc.toggleRelationSelection(rel)">
-              {{ rel }}
-            </div>
-            <div v-if="gc.relSearchResults.value.length === 0" class="kg-rel-search-item kg-no-results">无结果</div>
-          </div>
-        </div>
-        <div class="kg-selected-relations" v-if="gc.selectedRelations.value.length">
-          <div v-for="rel in gc.selectedRelations.value" :key="rel" class="kg-relation-chip">
+        <div class="kg-relation-chips">
+          <div
+            v-for="rel in gc.availableRelations.value"
+            :key="rel"
+            class="kg-relation-chip"
+            :class="{ active: gc.selectedRelations.value.includes(rel) }"
+            @click="gc.toggleRelationSelection(rel)"
+            @mouseenter="gc.hoveredRelation.value = rel"
+            @mouseleave="gc.hoveredRelation.value = null"
+          >
             {{ rel }}
-            <button class="kg-relation-chip-remove" @click="gc.toggleRelationSelection(rel)">X</button>
           </div>
         </div>
       </div>
@@ -164,6 +147,19 @@
         </div>
       </div>
     </div>
+
+    <div class="modal-overlay" :class="{ active: showDeleteModal }" @click.self="showDeleteModal = false">
+      <div class="modal-content modal-sm">
+        <div class="modal-body text-left">
+          <h2>删除会话</h2>
+          <p class="modal-text">确定删除会话 "<strong>{{ deleteTargetName }}</strong>" 吗？此操作不可撤销。</p>
+          <div class="modal-footer-btns">
+            <button class="btn btn-secondary" @click="showDeleteModal = false">取消</button>
+            <button class="btn btn-danger" @click="executeDelete">删除</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </aside>
 </template>
 
@@ -178,10 +174,13 @@ const route = useRoute()
 const sessionStore = useSessionStore()
 const gc = useGraphController()
 
-const sessionExpanded = ref(false)
+const sessionExpanded = ref(true)
 const showRenameModal = ref(false)
 const renameInput = ref('')
 const renameTargetId = ref(null)
+const showDeleteModal = ref(false)
+const deleteTargetId = ref(null)
+const deleteTargetName = ref('')
 
 // Show session manager only on chat page
 const showSessionManager = computed(() => route.path === '/chat')
@@ -194,7 +193,19 @@ watch(showGraphControls, (show) => {
   if (show && gc.graphData.value.entities.length === 0) {
     gc.loadGraphData()
   }
+  if (show) {
+    gc.updateAvailableRelations()
+  }
 }, { immediate: true })
+
+watch(() => gc.selectedNodes.value, () => {
+  gc.updateAvailableRelations()
+})  // No deep: true needed - selectedNodes uses array replacement, not in-place mutation
+
+// 切换会话时自动展开会话管理器
+watch(() => sessionStore.currentSessionId, () => {
+  sessionExpanded.value = true
+})
 
 onMounted(() => {
   // Load data if on graph page and data not loaded
@@ -218,12 +229,23 @@ function confirmRename() {
 
 function confirmDelete(sessionId) {
   if (Object.keys(sessionStore.sessions).length <= 1) {
-    alert('至少保留一个会话')
+    deleteTargetName.value = sessionStore.sessions[sessionId]?.name || '该会话'
+    deleteTargetId.value = sessionId
+    showDeleteModal.value = true
     return
   }
-  if (confirm('确定删除这个会话?')) {
-    sessionStore.deleteSession(sessionId)
+  deleteTargetName.value = sessionStore.sessions[sessionId]?.name || '该会话'
+  deleteTargetId.value = sessionId
+  showDeleteModal.value = true
+}
+
+function executeDelete() {
+  if (deleteTargetId.value) {
+    sessionStore.deleteSession(deleteTargetId.value)
   }
+  showDeleteModal.value = false
+  deleteTargetId.value = null
+  deleteTargetName.value = ''
 }
 </script>
 
@@ -234,11 +256,10 @@ function confirmDelete(sessionId) {
   overflow-y: auto;
   padding: var(--spacing-md);
   border-top: 1px solid var(--border-color);
-  margin-top: var(--spacing-md);
 }
 
 .sidebar-section {
-  margin-bottom: var(--spacing-lg);
+  margin-bottom: var(--spacing-md);
 }
 
 .sidebar-section-title {
@@ -258,7 +279,7 @@ function confirmDelete(sessionId) {
 
 .kg-search-box input {
   width: 100%;
-  padding: var(--spacing-sm) var(--spacing-md);
+  padding: var(--spacing-xs) var(--spacing-md);
   background: var(--bg-dark);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -322,18 +343,23 @@ function confirmDelete(sessionId) {
   gap: var(--spacing-xs);
   max-height: 200px;
   overflow-y: auto;
-  background: var(--bg-dark);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+}
+
+.kg-selected-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-bottom: var(--spacing-xs);
 }
 
 .kg-empty-hint {
   color: var(--text-dim);
   font-size: 0.8rem;
-  font-style: italic;
   text-align: center;
-  padding: var(--spacing-md);
+  padding: var(--spacing-xs);
 }
 
 .kg-selected-node {
@@ -387,30 +413,19 @@ function confirmDelete(sessionId) {
   font-weight: 600;
 }
 
-.kg-stats {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--spacing-sm);
+.kg-stats-inline {
+  display: flex;
+  gap: var(--spacing-md);
+  margin-top: var(--spacing-sm);
+  font-size: 0.8rem;
 }
 
-.kg-stat-item {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: var(--spacing-sm);
-  text-align: center;
+.kg-stats-inline span {
+  color: var(--text-secondary);
 }
 
-.kg-stat-label {
-  display: block;
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  margin-bottom: 2px;
-}
-
-.kg-stat-value {
+.kg-stats-inline .kg-stat-num {
   font-family: var(--font-mono);
-  font-size: 1rem;
   color: var(--color-primary);
 }
 
@@ -501,37 +516,32 @@ function confirmDelete(sessionId) {
   cursor: default;
 }
 
-.kg-selected-relations {
+.kg-relation-chips {
   display: flex;
   flex-wrap: wrap;
   gap: var(--spacing-xs);
-  margin-top: var(--spacing-sm);
 }
 
 .kg-relation-chip {
-  display: flex;
-  align-items: center;
-  gap: 4px;
   padding: 2px 8px;
   background: var(--bg-dark);
-  border: 1px solid var(--color-primary-dim);
+  border: 1px solid var(--border-color);
   border-radius: 12px;
   font-size: 0.75rem;
-  color: var(--color-primary);
-}
-
-.kg-relation-chip-remove {
-  background: none;
-  border: none;
-  color: var(--text-dim);
+  color: var(--text-secondary);
   cursor: pointer;
-  font-size: 0.65rem;
-  padding: 0;
-  line-height: 1;
+  transition: all var(--transition-fast);
 }
 
-.kg-relation-chip-remove:hover {
-  color: var(--color-danger);
+.kg-relation-chip:hover {
+  border-color: var(--color-primary-dim);
+  color: var(--text-primary);
+}
+
+.kg-relation-chip.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--bg-deep);
 }
 
 .kg-reset-btn {

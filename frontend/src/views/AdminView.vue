@@ -33,7 +33,7 @@
               <div class="form-group" style="position: relative;">
                 <input type="text" class="input" v-model="chunkSearch" placeholder="搜索文档..." @input="debouncedSearch" @focus="onSearchFocus" @blur="onSearchBlur">
                 <div class="chunk-search-results" v-if="searchFocused || searchResults.length" :class="{ active: searchFocused || searchResults.length }">
-                  <div v-for="r in (searchResults.length ? searchResults : chunks.slice(0, 50))" :key="r.filename" class="chunk-search-item" @click="selectChunk(r)">
+                  <div v-for="r in (searchResults.length ? searchResults : chunks)" :key="r.filename" class="chunk-search-item" @mousedown.prevent="selectChunk(r)">
                     {{ r.name }}
                   </div>
                 </div>
@@ -201,16 +201,8 @@
             <div class="debug-section" v-if="!compareMode">
               <h3>召回数量</h3>
               <div class="debug-param">
-                <label>干员库</label>
-                <input type="number" class="input input-small" v-model.number="debugTopKOperators" min="1" max="50">
-              </div>
-              <div class="debug-param">
-                <label>故事库</label>
-                <input type="number" class="input input-small" v-model.number="debugTopKStories" min="1" max="50">
-              </div>
-              <div class="debug-param">
-                <label>知识库</label>
-                <input type="number" class="input input-small" v-model.number="debugTopKKnowledge" min="1" max="50">
+                <label>每库召回</label>
+                <input type="number" class="input input-small" v-model.number="debugTopKPerChannel" min="1" max="50">
               </div>
               <div class="debug-param">
                 <label>重排数量</label>
@@ -269,6 +261,10 @@
                   <div class="compare-config-param">
                     <label>知识库</label>
                     <input type="number" class="input input-small" v-model.number="config.top_k_knowledge" min="1" max="50">
+                  </div>
+                  <div class="compare-config-param">
+                    <label>每库召回</label>
+                    <input type="number" class="input input-small" v-model.number="config.top_k_per_channel" min="1" max="50">
                   </div>
                   <div class="compare-config-param">
                     <label>重排数</label>
@@ -330,7 +326,7 @@
               </div>
               <div v-else class="compare-container">
                 <div v-for="result in compareResults" :key="result.config.id" class="compare-result-card" :class="{ expanded: result.expanded }">
-                  <div class="compare-result-header" @click="result.expanded = !result.expanded">
+                  <div class="compare-result-header" @click="toggleCompareResultExpanded(result.config.id)">
                     <div class="compare-result-summary">
                       <span class="compare-result-name">{{ result.config.name }}</span>
                       <span class="compare-result-meta">
@@ -341,19 +337,19 @@
                         ParentDoc:{{ result.config.use_parent_doc ? '✓' : '✗' }} |
                         耗时:{{ result.elapsed }}ms
                       </span>
-                      <span class="compare-result-answer" v-if="result.answer">{{ result.answer.substring(0, 80) }}{{ result.answer.length > 80 ? '...' : '' }}</span>
+                      <span class="compare-result-answer" v-if="result.answer">{{ escapeHtml(result.answer.substring(0, 80)) }}{{ result.answer.length > 80 ? '...' : '' }}</span>
                     </div>
                     <span class="compare-result-toggle">{{ result.expanded ? '▲ 点击收起' : '▼ 点击展开' }}</span>
                   </div>
                   <div class="compare-result-body" v-if="result.expanded">
-                    <div v-if="result.error" class="compare-error">{{ result.error }}</div>
+                    <div v-if="result.error" class="compare-error">{{ escapeHtml(result.error) }}</div>
                     <div v-else-if="result.pipeline_steps && result.pipeline_steps.length > 0" class="compare-steps">
                       <div v-for="step in result.pipeline_steps" :key="step.step" class="compare-step-card">
                         <div class="compare-step-header">
                           <span class="compare-step-number">{{ step.step }}</span>
                           <span class="compare-step-name">{{ step.name_cn || step.name }}</span>
                           <span class="compare-step-time">{{ step.time_ms }}ms</span>
-                          <span class="compare-step-toggle" @click="step.expanded = !step.expanded">{{ step.expanded ? '▲' : '▼' }}</span>
+                          <span class="compare-step-toggle" @click="toggleCompareStepExpandedByStep(step)">{{ step.expanded ? '▲' : '▼' }}</span>
                         </div>
                         <div class="compare-step-body" v-if="step.expanded">
                           <pre class="compare-step-content">{{ formatStepData(step.input_data) }}</pre>
@@ -407,10 +403,10 @@
               <!-- Result Cards -->
               <div class="eval-result-cards">
                 <div v-for="result in evalResults.results" :key="result.question_id" class="eval-result-card" :class="{ expanded: result.expanded }">
-                  <div class="eval-card-header" @click="result.expanded = !result.expanded">
+                  <div class="eval-card-header" @click="toggleEvalResultExpandedByResult(result)">
                     <div class="eval-card-summary">
                       <span class="eval-card-id">#{{ result.question_id }}</span>
-                      <span class="eval-card-question">{{ result.question }}</span>
+                      <span class="eval-card-question">{{ escapeHtml(result.question) }}</span>
                     </div>
                     <div class="eval-card-scores">
                       <span class="eval-score-badge" :class="getScoreClass(result.score)">
@@ -422,7 +418,7 @@
                   <div class="eval-card-body" v-if="result.expanded">
                     <div class="eval-card-section">
                       <h5>RAG 回答</h5>
-                      <p class="eval-answer">{{ result.answer || '(无回答)' }}</p>
+                      <p class="eval-answer">{{ result.answer ? escapeHtml(result.answer) : '(无回答)' }}</p>
                     </div>
                     <div class="eval-card-section">
                       <h5>评估结果</h5>
@@ -448,7 +444,7 @@
                           <span class="eval-score-value">{{ result.evaluation_method === 'llm' ? 'LLM评估' : '关键词评估' }}</span>
                         </div>
                       </div>
-                      <p class="eval-reasoning" v-if="result.reasoning">{{ result.reasoning }}</p>
+                      <p class="eval-reasoning" v-if="result.reasoning">{{ escapeHtml(result.reasoning) }}</p>
                     </div>
                   </div>
                 </div>
@@ -485,14 +481,9 @@
     <!-- 提示弹窗 -->
     <div class="modal-overlay" :class="{ active: showAlertModal }" @click.self="showAlertModal = false">
       <div class="modal-content modal-sm">
-        <div class="modal-header">
+        <div class="modal-body text-center">
           <h2>{{ alertTitle }}</h2>
-          <button class="modal-close" @click="showAlertModal = false">&times;</button>
-        </div>
-        <div class="modal-body">
           <p>{{ alertMessage }}</p>
-        </div>
-        <div class="modal-footer">
           <button class="btn btn-primary" @click="showAlertModal = false">确定</button>
         </div>
       </div>
@@ -502,7 +493,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { api, debounce } from '../api'
+import { api, debounce, escapeHtml } from '../api'
 
 const activeTab = ref('chunk')
 const chunkCollection = ref('operators')
@@ -538,7 +529,7 @@ async function loadChunks() {
     }
     // 如果搜索框已聚焦且没有搜索内容，更新下拉列表
     if (searchFocused.value && !chunkSearch.value.trim()) {
-      searchResults.value = chunks.value.slice(0, 50)
+      searchResults.value = chunks.value
     }
   } catch (e) {
     chunks.value = []
@@ -580,7 +571,7 @@ const debouncedSearch = debounce(() => {
   // Filter from already loaded chunks
   searchResults.value = chunks.value.filter(c =>
     (c.name || c.filename || '').toLowerCase().includes(chunkSearch.value.toLowerCase())
-  ).slice(0, 50)
+  )
 }, 200)
 
 function onSearchFocus() {
@@ -589,15 +580,17 @@ function onSearchFocus() {
     if (loadingChunks.value) {
       searchResults.value = [{ name: '加载中...', filename: '', placeholder: true }]
     } else {
-      searchResults.value = chunks.value.slice(0, 50)
+      searchResults.value = chunks.value
     }
   }
 }
 
 function onSearchBlur() {
   searchFocused.value = false
-  // 清空搜索结果，避免失去焦点后下拉框仍然显示
-  searchResults.value = []
+  // 延迟清空搜索结果，确保点击事件能先触发
+  setTimeout(() => {
+    searchResults.value = []
+  }, 200)
 }
 
 async function loadStats() {
@@ -658,9 +651,7 @@ const debugQuestion = ref('')
 const debugUseCrag = ref(true)
 const debugUseGraphrag = ref(true)
 const debugUseParentDoc = ref(true)
-const debugTopKOperators = ref(10)
-const debugTopKStories = ref(10)
-const debugTopKKnowledge = ref(10)
+const debugTopKPerChannel = ref(8)
 const debugRerankTopK = ref(5)
 const debugRunning = ref(false)
 const currentStep = ref(null)
@@ -693,6 +684,38 @@ const confirmResolve = ref(null)
 const alertTitle = ref('提示')
 const alertMessage = ref('')
 
+// Toggle functions for reactive state (avoid direct mutation in template)
+function toggleDebugStepExpanded(stepId) {
+  const step = debugSteps.value.find(s => s.id === stepId)
+  if (step) {
+    step.expanded = !step.expanded
+  }
+}
+
+function toggleCompareResultExpanded(resultId) {
+  const result = compareResults.value.find(r => r.config.id === resultId)
+  if (result) {
+    result.expanded = !result.expanded
+  }
+}
+
+function toggleCompareStepExpandedByStep(step) {
+  // Toggle directly on step object from v-for (Vue tracks the mutation)
+  step.expanded = !step.expanded
+}
+
+function toggleEvalResultExpandedByResult(result) {
+  // Toggle directly on result object from v-for
+  result.expanded = !result.expanded
+}
+
+function toggleDebugStepStatus(stepId, status) {
+  const step = debugSteps.value.find(s => s.id === stepId)
+  if (step) {
+    step.status = status
+  }
+}
+
 function toggleCompareMode() {
   compareMode.value = !compareMode.value
   if (compareMode.value) {
@@ -703,9 +726,10 @@ function toggleCompareMode() {
       use_crag: true,
       use_graphrag: true,
       use_parent_doc: true,
-      top_k_operators: 10,
-      top_k_stories: 10,
-      top_k_knowledge: 10,
+      top_k_operators: 8,
+      top_k_stories: 8,
+      top_k_knowledge: 8,
+      top_k_per_channel: 8,
       rerank_top_k: 5
     }]
     compareResults.value = []
@@ -842,9 +866,7 @@ async function runDebugStep(stepId) {
       use_crag: debugUseCrag.value,
       use_graphrag: debugUseGraphrag.value,
       use_parent_doc: debugUseParentDoc.value,
-      top_k_operators: debugTopKOperators.value,
-      top_k_stories: debugTopKStories.value,
-      top_k_knowledge: debugTopKKnowledge.value,
+      top_k_per_channel: debugTopKPerChannel.value,
       rerank_top_k: debugRerankTopK.value,
       conversation_history: [],
       step_results: stepResults.value
@@ -948,12 +970,11 @@ async function runAllDebugSteps() {
   for (let i = 1; i <= 8; i++) {
     await runDebugStep(i)
     const step = debugSteps.value.find(s => s.id === i)
-    // 如果某个步骤失败或被禁用，停止
+    // 如果某个步骤失败，停止
     if (step.status !== 'executed') break
-    // 如果步骤返回 disabled，停止后续步骤
-    if (stepResults.value[i]?.disabled) break
-    // 网络搜索步骤(7)继续执行
-    if (i === 7) continue
+    // 如果步骤返回 disabled（可忽略的步骤），停止后续步骤
+    // 但 Web Search 被禁用时允许继续，因为 Answer Generation 不依赖它
+    if (stepResults.value[i]?.disabled && i !== 7) break
   }
   debugRunning.value = false
 }
@@ -1017,7 +1038,7 @@ function getScoreClass(score) {
 .chunk-list-header { padding: var(--spacing-md); border-bottom: 1px solid var(--border-color); background: var(--bg-card); }
 .chunk-list-header .form-group { margin-bottom: var(--spacing-sm); }
 .chunk-list-header .form-group:last-child { margin-bottom: 0; }
-.chunk-search-results { position: absolute; top: 100%; left: 0; width: 100%; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-md); max-height: 200px; overflow-y: auto; z-index: 100; display: none; }
+.chunk-search-results { position: absolute; top: 100%; left: 0; width: 100%; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-md); max-height: 600px; overflow-y: auto; z-index: 100; display: none; }
 .chunk-search-results.active { display: block; }
 .chunk-search-item { padding: var(--spacing-sm) var(--spacing-md); cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid var(--border-color); transition: background var(--transition-fast); }
 .chunk-search-item:hover { background: var(--bg-panel-hover); }
@@ -1155,6 +1176,10 @@ function getScoreClass(score) {
 .modal-close:hover { color: var(--text-primary); }
 .modal-body { padding: var(--spacing-lg); }
 .modal-body p { color: var(--text-secondary); margin: 0; line-height: 1.6; }
+.modal-body.text-center { text-align: left; }
+.modal-body.text-center h2 { font-family: var(--font-display); font-size: 1.1rem; color: var(--text-primary); margin: 0 0 var(--spacing-sm) 0; }
+.modal-body.text-center p { color: var(--text-secondary); margin: 0 0 var(--spacing-lg) 0; }
+.modal-body.text-center .btn { margin-top: var(--spacing-sm); float: right; }
 .modal-footer { display: flex; justify-content: flex-end; gap: var(--spacing-sm); padding: var(--spacing-lg); border-top: 1px solid var(--border-color); }
 
 /* Compare mode styles */

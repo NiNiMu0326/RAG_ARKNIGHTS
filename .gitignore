@@ -26,5 +26,8 @@ Thumbs.db
 chroma_db/
 chunks/
 
+# Temporary directories
+.tmp/
+
 # Local data (keep for others to process)
 # data/  # Uncomment if you don't want to share the raw data

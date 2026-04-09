@@ -1,0 +1,56 @@
+# Git
+.git
+.gitignore
+
+# Node (frontend build)
+frontend/node_modules
+frontend/dist
+frontend/.npm
+frontend/.vite
+
+# Python
+__pycache__
+*.py[cod]
+*.egg-info
+.eggs
+.pytest_cache
+.mypy_cache
+
+# Virtual environments
+venv
+.venv
+env
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.bak
+.cache/
+
+# Test files
+**/*test*.py
+**/test_*.py
+**/__pycache__
+
+# Local development
+.env.local
+.env.development
+*.local
+
+# Performance test results
+*_results*.json
+*_summary*.csv
+performance_output.txt

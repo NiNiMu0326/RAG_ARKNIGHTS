@@ -20,7 +20,7 @@
             >
               <div class="chat-bubble">
                 <div class="chat-role">{{ msg.role === 'user' ? 'You' : 'Arknights RAG' }}</div>
-                <div class="chat-text">{{ msg.content }}</div>
+                <div class="chat-text">{{ escapeHtml(msg.content) }}</div>
               </div>
               <div class="chat-time">{{ formatTime(new Date(msg.timestamp)) }}</div>
             </div>
@@ -29,12 +29,8 @@
           <div v-if="isLoading" class="chat-message assistant">
             <div class="chat-bubble">
               <div class="chat-role">Arknights RAG</div>
-              <div class="streaming-status" v-if="streamingStatus">
-                <div class="streaming-spinner"></div>
-                <span class="streaming-status-text">{{ streamingStatus }}</span>
-              </div>
-              <div class="streaming-answer" v-if="streamingAnswer">{{ streamingAnswer }}</div>
-              <div class="typing-indicator" v-else>
+              <div class="current-answer" v-if="currentAnswer">{{ escapeHtml(currentAnswer) }}</div>
+              <div class="typing-indicator" v-if="!currentAnswer">
                 <span></span><span></span><span></span>
               </div>
             </div>
@@ -130,7 +126,7 @@
                       <span class="doc-expand-icon">▼</span>
                     </span>
                   </div>
-                  <div class="doc-content" v-if="expandedDocs.includes(i)">{{ doc.content }}</div>
+                  <div class="doc-content" v-if="expandedDocs.includes(i)">{{ doc.content ? escapeHtml(doc.content) : '' }}</div>
                 </div>
               </div>
             </div>
@@ -214,11 +210,11 @@
                 class="kg-relation"
               >
                 <div class="kg-relation-title">
-                  <strong>{{ r.operator1 }}</strong>
-                  <span class="text-primary"> --{{ r.relation }}--></span>
-                  <strong>{{ r.operator2 }}</strong>
+                  <strong>{{ escapeHtml(r.operator1) }}</strong>
+                  <span class="text-primary"> --{{ escapeHtml(r.relation) }}--></span>
+                  <strong>{{ escapeHtml(r.operator2) }}</strong>
                 </div>
-                <div v-if="r.description" class="kg-relation-desc">{{ r.description }}</div>
+                <div v-if="r.description" class="kg-relation-desc">{{ escapeHtml(r.description) }}</div>
               </div>
             </div>
           </div>
@@ -234,7 +230,7 @@ import { useRoute } from 'vue-router'
 import { useSessionStore } from '../stores/sessions'
 import { useSettingsStore } from '../stores/settings'
 import { useQuickQuestionsStore } from '../stores/quickQuestions'
-import { api, formatTime } from '../api'
+import { api, formatTime, escapeHtml } from '../api'
 import { generateQuickQuestions } from '../utils/quickQuestions'
 
 const sessionStore = useSessionStore()
@@ -244,8 +240,7 @@ const route = useRoute()
 
 const inputText = ref('')
 const isLoading = ref(false)
-const streamingStatus = ref('')
-const streamingAnswer = ref('')
+const currentAnswer = ref('')
 const activeTab = ref('results')
 const pipelineExpanded = ref(false)
 const expandedDocs = ref([])
@@ -292,6 +287,21 @@ onUnmounted(() => {
 // Watch for session changes to update lastResult
 watch(() => sessionStore.currentSessionId, (newId, oldId) => {
   console.log('[ChatView] session changed from', oldId, 'to', newId)
+
+  // 只有真正切换到不同会话时才清理流式输出状态
+  if (newId !== oldId) {
+    // 如果是从null到有效ID，可能是初始加载，不中止请求
+    if (oldId !== null) {
+      // 中止正在进行的请求
+      if (abortController.value) {
+        abortController.value.abort()
+        abortController.value = null
+      }
+      isLoading.value = false
+      currentAnswer.value = ''
+    }
+  }
+
   if (sessionStore.currentSession?.lastResult) {
     lastResult.value = sessionStore.currentSession.lastResult
     console.log('[ChatView] restored lastResult for new session')
@@ -303,7 +313,7 @@ watch(() => sessionStore.currentSessionId, (newId, oldId) => {
   nextTick(() => scrollToBottom())
 
   // 如果是新建的会话（消息为空），刷新快速问题
-  if (sessionStore.currentSession?.messages?.length === 0) {
+  if (!sessionStore.currentSession || sessionStore.currentSession.messages?.length === 0) {
     console.log('[ChatView] New session detected, refreshing quick actions')
     refreshQuickActions()
   }
@@ -322,8 +332,8 @@ const cragStatusClass = computed(() => {
   const level = lastResult.value?.crag_level
   return {
     'status-high': level === 'HIGH',
-    'status-medium': level === 'MEDIUM',
-    'status-low': level === 'LOW'
+    'status-low': level === 'LOW',
+    'status-direct': level === 'DIRECT'
   }
 })
 
@@ -331,8 +341,8 @@ const cragStatusDesc = computed(() => {
   const level = lastResult.value?.crag_level
   return {
     'HIGH': '检索结果高质量',
-    'MEDIUM': '检索结果中等',
-    'LOW': '检索结果低质量'
+    'LOW': '检索结果低质量',
+    'DIRECT': '直接回答'
   }[level] || '等待查询'
 })
 
@@ -362,8 +372,17 @@ function formatStepData(data) {
 
 function autoResize(e) {
   const textarea = e.target
-  textarea.style.height = 'auto'
-  textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px'
+  const content = textarea.value.trim()
+  if (!content) {
+    // 空内容时保持单行高度
+    textarea.style.height = 'auto'
+    textarea.style.overflowY = 'hidden'
+  } else {
+    // 有内容时，超过最大高度才滚动
+    textarea.style.height = 'auto'
+    textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px'
+    textarea.style.overflowY = textarea.scrollHeight > 150 ? 'auto' : 'hidden'
+  }
 }
 
 async function sendMessage() {
@@ -380,8 +399,7 @@ async function sendMessage() {
 
   isLoading.value = true
   inputText.value = ''
-  streamingStatus.value = ''
-  streamingAnswer.value = ''
+  currentAnswer.value = ''
   expandedDocs.value = []
 
   sessionStore.addMessage('user', content)
@@ -395,6 +413,8 @@ async function sendMessage() {
   const controller = new AbortController()
   abortController.value = controller
 
+  let finalResult = null
+
   try {
     const history = sessionStore.currentSession.messages
       .slice(0, -1)
@@ -402,20 +422,33 @@ async function sendMessage() {
       .slice(-6)
       .map(m => ({ role: m.role, content: m.content }))
 
+    // 使用非流式接口
     const result = await api.query(content, {
       conversation_history: history,
       ...settingsStore.getRAGSettings()
     }, controller.signal)
 
-    lastResult.value = result
-    sessionStore.setLastResult(result)
-    sessionStore.addMessage('assistant', result.answer)
+    // 直接显示完整答案
+    currentAnswer.value = result.answer
+    scrollToBottom()
+
+    // 保存最终结果
+    finalResult = result
+    lastResult.value = finalResult
+    sessionStore.setLastResult(finalResult)
+    // 将完整答案添加到消息列表
+    sessionStore.addMessage('assistant', finalResult.answer)
   } catch (error) {
+    // 确保状态完全清理
+    isLoading.value = false
+    currentAnswer.value = ''
+
     // 如果是请求被中止，添加提示消息
     if (error.name === 'AbortError') {
       console.log('[ChatView] 请求被用户中止')
       sessionStore.addMessage('assistant', '请求被中断，请重新发送消息')
     } else {
+      console.error('[ChatView] Query error:', error)
       sessionStore.addMessage('assistant', `错误: ${error.message}`)
     }
   }
@@ -543,7 +576,7 @@ function scrollToBottom() {
 .chat-page { display: flex; flex-direction: column; height: calc(100vh - 80px); }
 .chat-main { flex: 1; display: flex; overflow: hidden; }
 .chat-panel { flex: 1; display: flex; flex-direction: column; border-right: 1px solid var(--border-color); }
-.chat-messages { flex: 1; overflow-y: auto; padding: var(--spacing-lg); }
+.chat-messages { flex: 1; overflow-y: auto; padding: var(--spacing-lg); min-height: 0; }
 .chat-input-area { padding: var(--spacing-lg); background: var(--bg-panel); border-top: 1px solid var(--border-color); }
 .chat-form { display: flex; gap: var(--spacing-md); align-items: center; }
 .chat-input-wrapper { flex: 1; position: relative; }
@@ -614,10 +647,7 @@ function scrollToBottom() {
 .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
 .typing-indicator span:nth-child(3) { animation-delay: 0s; }
 @keyframes typingBounce { 0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
-.streaming-status { display: flex; align-items: center; gap: var(--spacing-sm); font-size: 0.85rem; color: var(--color-primary); margin-bottom: var(--spacing-sm); padding: var(--spacing-xs) var(--spacing-sm); background: rgba(0, 229, 204, 0.1); border-radius: var(--radius-sm); }
-.streaming-spinner { width: 16px; height: 16px; border: 2px solid var(--border-color); border-top-color: var(--color-primary); border-radius: 50%; animation: spin 1s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.streaming-answer { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+.current-answer { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 .doc-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); margin-bottom: var(--spacing-sm); overflow: hidden; }
 .doc-header { display: flex; justify-content: space-between; align-items: center; padding: var(--spacing-sm) var(--spacing-md); cursor: pointer; transition: background var(--transition-fast); }
 .doc-header:hover { background: var(--bg-panel-hover); }
@@ -637,9 +667,9 @@ function scrollToBottom() {
 .pipeline-steps-empty { padding: var(--spacing-lg); text-align: center; color: var(--text-dim); font-size: 0.85rem; }
 .pipeline-step-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; margin-bottom: var(--spacing-sm); }
 .pipeline-step-header { display: flex; align-items: center; padding: var(--spacing-sm) var(--spacing-md); gap: var(--spacing-sm); }
-.pipeline-step-card .step-number { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: var(--color-primary); color: var(--bg-deep); border-radius: 50%; font-family: var(--font-mono); font-size: 0.7rem; font-weight: 600; flex-shrink: 0; }
+.pipeline-step-card .step-number { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: var(--bg-panel); color: var(--color-primary); border: 1px solid var(--color-primary); border-radius: 50%; font-family: var(--font-mono); font-size: 0.7rem; font-weight: 600; flex-shrink: 0; }
 .pipeline-step-card .step-name { font-size: 0.85rem; font-weight: 500; color: var(--text-primary); min-width: 100px; }
-.pipeline-step-card .step-desc { font-size: 0.75rem; color: var(--text-dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pipeline-step-card .step-desc { font-size: 0.85rem; color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
 .pipeline-step-card .step-time { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-primary); margin-left: auto; }
 .pipeline-step-card .step-toggle { font-size: 0.6rem; color: var(--text-dim); margin-left: var(--spacing-xs); }
 .pipeline-step-card .pipeline-step-header { cursor: pointer; }
@@ -660,4 +690,11 @@ function scrollToBottom() {
 .pending-message { display: flex; align-items: center; gap: var(--spacing-sm); padding: var(--spacing-sm) var(--spacing-md); background: var(--bg-panel); border: 1px dashed var(--border-color); border-radius: var(--radius-md); font-size: 0.85rem; opacity: 0.7; }
 .pending-label { color: var(--text-dim); font-size: 0.75rem; flex-shrink: 0; }
 .pending-text { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 0.75rem; font-weight: 600; }
+.status-badge { background: transparent; }
+.status-badge.status-high { color: var(--status-high); }
+.status-badge.status-medium { color: var(--status-medium); }
+.status-badge.status-low { color: var(--status-low); }
+.status-badge.status-direct { color: var(--color-primary); }
+.step-rag-tag { font-size: 0.65rem; padding: 1px 6px; border-radius: 8px; margin-left: var(--spacing-xs); background: rgba(0, 229, 204, 0.15); color: var(--color-primary); }
 </style>

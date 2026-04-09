@@ -3,15 +3,18 @@ SiliconFlow API client for LLM, embedding, reranking, and web search.
 Uses Tavily for internet search (SiliconFlow internet search API is deprecated).
 """
 
+import time
 from typing import List, Dict, Any
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 import config
 
 
 class SiliconFlowClient:
-    """Client for SiliconFlow API calls."""
+    """Client for SiliconFlow API calls with connection pooling and retry logic."""
 
     def __init__(self, api_key: str = None, tavily_api_key: str = None):
         """
@@ -28,7 +31,17 @@ class SiliconFlowClient:
         self.base_url = config.SILICONFLOW_BASE_URL
         self.embedding_model = config.EMBEDDING_MODEL
         self.reranker_model = config.RERANKER_MODEL
-        self.llm_model = config.LLM_MODEL
+        # Create session with connection pooling and retry logic
+        self._session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST", "GET"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=20)
+        self._session.mount("http://", adapter)
+        self._session.mount("https://", adapter)
 
     def embed(self, texts: List[str], model: str = None) -> List[List[float]]:
         """
@@ -56,7 +69,7 @@ class SiliconFlowClient:
             "input": texts
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        response = self._session.post(url, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
 
         try:
@@ -93,7 +106,7 @@ class SiliconFlowClient:
             "documents": documents
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        response = self._session.post(url, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
 
         try:
@@ -102,100 +115,13 @@ class SiliconFlowClient:
             raise Exception(f"Invalid JSON response from {url}: {response.text[:200]}")
         return result["results"]
 
-    def chat(self, messages: List[Dict[str, str]], model: str = None,
-             temperature: float = 0.7, **kwargs) -> str:
-        """
-        Send chat completion request.
-
-        Args:
-            messages: List of message dicts with "role" and "content" keys.
-            model: LLM model to use. Defaults to config LLM_MODEL.
-            temperature: Sampling temperature. Defaults to 0.7.
-            **kwargs: Additional arguments passed to the API.
-
-        Returns:
-            Assistant message content string.
-        """
-        model = model or self.llm_model
-        url = f"{self.base_url}/chat/completions"
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            **kwargs
-        }
-
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
-        response.raise_for_status()
-
-        try:
-            result = response.json()
-        except ValueError:
-            raise Exception(f"Invalid JSON response from {url}: {response.text[:200]}")
-        return result["choices"][0]["message"]["content"]
-
-    def chat_stream(self, messages: List[Dict[str, str]], model: str = None,
-                    temperature: float = 0.7, **kwargs):
-        """
-        Send streaming chat completion request.
-
-        Args:
-            messages: List of message dicts with "role" and "content" keys.
-            model: LLM model to use. Defaults to config LLM_MODEL.
-            temperature: Sampling temperature. Defaults to 0.7.
-            **kwargs: Additional arguments passed to the API.
-
-        Yields:
-            Chunks of assistant message content.
-        """
-        model = model or self.llm_model
-        url = f"{self.base_url}/chat/completions"
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "stream": True,
-            **kwargs
-        }
-
-        response = requests.post(url, headers=headers, json=payload, timeout=300, stream=True)
-        response.raise_for_status()
-
-        for line in response.iter_lines():
-            if line:
-                line = line.decode('utf-8')
-                if line.startswith('data: '):
-                    data = line[6:]  # Remove 'data: ' prefix
-                    if data == '[DONE]':
-                        break
-                    try:
-                        import json
-                        chunk = json.loads(data)
-                        delta = chunk.get('choices', [{}])[0].get('delta', {})
-                        content = delta.get('content', '')
-                        if content:
-                            yield content
-                    except json.JSONDecodeError:
-                        continue
-
-    def search(self, query: str) -> List[Dict[str, str]]:
+    def search(self, query: str, limit: int = 10) -> List[Dict[str, str]]:
         """
         Perform web search using Tavily internet search.
 
         Args:
             query: Search query string.
+            limit: Maximum number of results to return (default: 10).
 
         Returns:
             List of search result dicts with "title", "url", and "snippet" keys.
@@ -213,10 +139,10 @@ class SiliconFlowClient:
             "api_key": self.tavily_api_key,
             "query": query,
             "search_depth": "basic",
-            "max_results": 10
+            "max_results": limit
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        response = self._session.post(url, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
 
         try:
@@ -226,11 +152,40 @@ class SiliconFlowClient:
 
         # Transform Tavily response to match expected format
         tavily_results = result.get("results", [])
+        # Limit results to the specified limit
+        limited_results = tavily_results[:limit]
         return [
             {
                 "title": r.get("title", ""),
                 "url": r.get("url", ""),
                 "snippet": r.get("content", "")
             }
-            for r in tavily_results
+            for r in limited_results
         ]
+
+    def chat(self, messages: List[Dict[str, str]], model: str = None,
+             temperature: float = 0.7, **kwargs) -> str:
+        """Send chat completion request via SiliconFlow."""
+        model = model or "Qwen/Qwen2.5-7B-Instruct"
+        url = f"{self.base_url}/chat/completions"
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            **kwargs
+        }
+
+        response = self._session.post(url, headers=headers, json=payload, timeout=120)
+        response.raise_for_status()
+
+        try:
+            result = response.json()
+        except ValueError:
+            raise Exception(f"Invalid JSON response: {response.text[:200]}")
+        return result["choices"][0]["message"]["content"]

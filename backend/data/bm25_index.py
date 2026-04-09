@@ -14,18 +14,29 @@ class BM25Indexer:
         self.b = b
         self.bm25 = None
         self.corpus = []
+        self.corpus_ids = []  # List of chunk IDs (can be file paths or indices)
         self.corpus_size = 0
         self.doc_lengths = []
         self.avgdl = 0
 
-    def build(self, corpus: List[str]):
-        """Build BM25 index from list of document texts."""
+    def build(self, corpus: List[str], corpus_ids: List[str] = None):
+        """Build BM25 index from list of document texts.
+
+        Args:
+            corpus: List of document texts
+            corpus_ids: List of corresponding chunk IDs (optional, defaults to indices)
+        """
         self.corpus = corpus
         self.corpus_size = len(corpus)
         tokenized_corpus = [doc.split() for doc in corpus]
         self.bm25 = BM25Okapi(tokenized_corpus, k1=self.k1, b=self.b)
         self.doc_lengths = [len(doc.split()) for doc in corpus]
         self.avgdl = sum(self.doc_lengths) / len(self.doc_lengths) if self.doc_lengths else 0
+        # Build corpus_ids if not provided (use indices as fallback)
+        if corpus_ids is None:
+            self.corpus_ids = [f"doc_{i}" for i in range(len(corpus))]
+        else:
+            self.corpus_ids = corpus_ids
 
     def retrieve(self, query: str, top_k: int = 10) -> List[int]:
         """Retrieve top-k document indices for a query."""
@@ -42,6 +53,7 @@ class BM25Indexer:
             pickle.dump({
                 'bm25': self.bm25,
                 'corpus': self.corpus,
+                'corpus_ids': getattr(self, 'corpus_ids', [f"doc_{i}" for i in range(len(self.corpus))]),
                 'corpus_size': self.corpus_size,
                 'doc_lengths': self.doc_lengths,
                 'avgdl': self.avgdl,
@@ -57,6 +69,7 @@ class BM25Indexer:
         indexer = cls(k1=data['k1'], b=data['b'])
         indexer.bm25 = data['bm25']
         indexer.corpus = data['corpus']
+        indexer.corpus_ids = data.get('corpus_ids', [f"doc_{i}" for i in range(len(data['corpus']))])
         indexer.corpus_size = data['corpus_size']
         indexer.doc_lengths = data['doc_lengths']
         indexer.avgdl = data['avgdl']
@@ -76,12 +89,15 @@ def build_collection_bm25(collection_name: str, chunks_dir: str = None) -> BM25I
     chunk_paths.sort()
 
     corpus = []
+    corpus_ids = []
     for path in chunk_paths:
         with open(path, 'r', encoding='utf-8') as f:
             corpus.append(f.read())
+        # Use path.stem as chunk_id (same as ChromaDB's chunk_id in index_manager.py)
+        corpus_ids.append(path.stem)
 
     indexer = BM25Indexer()
-    indexer.build(corpus)
+    indexer.build(corpus, corpus_ids)
     return indexer, corpus
 
 

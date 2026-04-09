@@ -12,8 +12,11 @@ const searchFocused = ref(false)
 const relSearchQuery = ref('')
 const relSearchResults = ref([])
 const relSearchFocused = ref(false)
+const availableRelations = ref([])
+const hoveredRelation = ref(null)
 const loading = ref(false)
 const stats = reactive({ nodes: 0, edges: 0 })
+const currentStats = reactive({ nodes: 0, edges: 0 })
 
 // Relation colors for highlighting
 const relationColors = {}
@@ -56,6 +59,11 @@ export function useGraphController() {
     stats.edges = graphData.value.relations?.length || 0
   }
 
+  function updateCurrentStats(nodes, edges) {
+    currentStats.nodes = nodes
+    currentStats.edges = edges
+  }
+
   // Node selection
   function addNodeSelection(nodeId) {
     console.log('addNodeSelection called:', nodeId)
@@ -67,15 +75,18 @@ export function useGraphController() {
     searchQuery.value = ''
     searchResults.value = []
     searchFocused.value = false
+    updateAvailableRelations()
   }
 
   function removeNodeSelection(nodeId) {
     selectedNodes.value = selectedNodes.value.filter(id => id !== nodeId)
+    updateAvailableRelations()
   }
 
   function clearSelection() {
     selectedNodes.value = []
     selectedRelations.value = []
+    availableRelations.value = []
     selectedEdge.value = null
   }
 
@@ -145,6 +156,23 @@ export function useGraphController() {
     }
   }
 
+  function updateAvailableRelations() {
+    if (selectedNodes.value.length === 0) {
+      availableRelations.value = []
+      return
+    }
+    const nodeSet = new Set(selectedNodes.value)
+    const relationTypes = new Set()
+    ;(graphData.value.relations || []).forEach(r => {
+      if (nodeSet.has(r.source) || nodeSet.has(r.target)) {
+        relationTypes.add(r.relation)
+      }
+    })
+    availableRelations.value = Array.from(relationTypes).sort((a, b) => a.localeCompare(b))
+    // Default: select all
+    selectedRelations.value = [...availableRelations.value]
+  }
+
   // Level
   function setNeighborLevel(level) {
     neighborLevel.value = level
@@ -162,11 +190,15 @@ export function useGraphController() {
     relSearchQuery,
     relSearchResults,
     relSearchFocused,
+    availableRelations,
+    hoveredRelation,
     loading,
     stats,
+    currentStats,
     relationColors,
     // Actions
     loadGraphData,
+    updateCurrentStats,
     addNodeSelection,
     removeNodeSelection,
     clearSelection,
@@ -177,6 +209,7 @@ export function useGraphController() {
     onRelSearchFocus,
     onRelSearchBlur,
     toggleRelationSelection,
+    updateAvailableRelations,
     setNeighborLevel
   }
 }

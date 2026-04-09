@@ -16,15 +16,17 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import uvicorn
 
 # Import RAG components
 from backend.rag.orchestrator import RAGOrchestrator, get_orchestrator
 from backend.config import (
     BASE_DIR, CHUNKS_DIR, CHROMA_DIR, DATA_DIR,
-    ENTITY_RELATIONS_FILE, EVAL_QUESTIONS_FILE, SILICONFLOW_API_KEY
+    ENTITY_RELATIONS_FILE, EVAL_QUESTIONS_FILE, SILICONFLOW_API_KEY,
+    EMBEDDING_MODEL, RERANKER_MODEL, DEEPSEEK_LLM_MODEL
 )
+import config
 from eval.rag_eval import LLMEvaluator, load_questions, run_evaluation
 
 # ============== FastAPI App ==============
@@ -60,10 +62,27 @@ class QueryRequest(BaseModel):
     use_parent_doc: bool = True
     use_graphrag: bool = True
     use_crag: bool = True
-    top_k_operators: int = 10
-    top_k_stories: int = 10
-    top_k_knowledge: int = 10
+    top_k_operators: int = 8
+    top_k_stories: int = 8
+    top_k_knowledge: int = 8
+    top_k_per_channel: int = 8
     rerank_top_k: int = 5
+
+    @field_validator('question')
+    @classmethod
+    def question_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError('question cannot be empty')
+        return v.strip()
+
+    @field_validator('top_k_operators', 'top_k_stories', 'top_k_knowledge', 'top_k_per_channel', 'rerank_top_k')
+    @classmethod
+    def top_k_must_be_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f'top_k values must be positive, got {v}')
+        if v > 100:
+            raise ValueError(f'top_k values must not exceed 100, got {v}')
+        return v
 
 
 class StepDebugRequest(BaseModel):
@@ -75,10 +94,34 @@ class StepDebugRequest(BaseModel):
     use_parent_doc: bool = True
     use_graphrag: bool = True
     use_crag: bool = True
-    top_k_operators: int = 10
-    top_k_stories: int = 10
-    top_k_knowledge: int = 10
+    top_k_operators: int = 8
+    top_k_stories: int = 8
+    top_k_knowledge: int = 8
+    top_k_per_channel: int = 8
     rerank_top_k: int = 5
+
+    @field_validator('question')
+    @classmethod
+    def question_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError('question cannot be empty')
+        return v.strip()
+
+    @field_validator('step')
+    @classmethod
+    def step_must_be_valid(cls, v: int) -> int:
+        if v < 1 or v > 8:
+            raise ValueError(f'step must be between 1 and 8, got {v}')
+        return v
+
+    @field_validator('top_k_operators', 'top_k_stories', 'top_k_knowledge', 'rerank_top_k')
+    @classmethod
+    def top_k_must_be_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f'top_k values must be positive, got {v}')
+        if v > 100:
+            raise ValueError(f'top_k values must not exceed 100, got {v}')
+        return v
 
 
 class QueryResponse(BaseModel):
@@ -131,6 +174,24 @@ async def root():
     return {"message": "Arknights RAG API", "version": "1.0.0"}
 
 
+@app.get("/health")
+async def health():
+    """Health check endpoint for Docker."""
+    return {"status": "healthy"}
+
+
+@app.get("/status")
+async def status():
+    """Get service health status."""
+    return {
+        "status": "healthy",
+        "api_key_configured": bool(SILICONFLOW_API_KEY),
+        "embedding_model": config.EMBEDDING_MODEL,
+        "reranker_model": config.RERANKER_MODEL,
+        "llm_model": config.DEEPSEEK_LLM_MODEL
+    }
+
+
 @app.post("/query", response_model=QueryResponse)
 async def query(req: QueryRequest):
     """Execute RAG query and return answer with metadata"""
@@ -145,6 +206,7 @@ async def query(req: QueryRequest):
             top_k_operators=req.top_k_operators,
             top_k_stories=req.top_k_stories,
             top_k_knowledge=req.top_k_knowledge,
+            top_k_per_channel=req.top_k_per_channel,
             rerank_top_k=req.rerank_top_k
         )
 
@@ -163,40 +225,8 @@ async def query(req: QueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/query/stream")
-async def query_stream(req: QueryRequest):
-    """Execute RAG query with streaming response.
 
-    Returns SSE events for each step and streams the answer.
-    """
-    try:
-        orch = get_orch()
 
-        async def event_generator():
-            for event in orch.query_stream(
-                question=req.question,
-                conversation_history=req.conversation_history,
-                use_parent_doc=req.use_parent_doc,
-                use_graphrag=req.use_graphrag,
-                use_crag=req.use_crag,
-                top_k_operators=req.top_k_operators,
-                top_k_stories=req.top_k_stories,
-                top_k_knowledge=req.top_k_knowledge,
-                rerank_top_k=req.rerank_top_k
-            ):
-                yield event.encode('utf-8') if isinstance(event, str) else event
-
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no"
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/debug/step", response_model=StepDebugResponse)
@@ -215,6 +245,7 @@ async def debug_step(req: StepDebugRequest):
             top_k_operators=req.top_k_operators,
             top_k_stories=req.top_k_stories,
             top_k_knowledge=req.top_k_knowledge,
+            top_k_per_channel=req.top_k_per_channel,
             rerank_top_k=req.rerank_top_k
         )
 
@@ -425,5 +456,5 @@ async def get_stories():
 
 # ============== Run Server ==============
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 8888))
     uvicorn.run(app, host="0.0.0.0", port=port)

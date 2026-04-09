@@ -1,10 +1,13 @@
 import sys
 import warnings
 import time
+import threading
+import concurrent.futures
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, field
+import config
 from backend.api.siliconflow import SiliconFlowClient
 from backend.rag.query_rewriter import QueryRewriter
 from backend.rag.multi_channel_recall import multi_channel_recall
@@ -28,14 +31,27 @@ class RAGAnswer:
     pipeline_steps: List[Dict] = field(default_factory=list)
     total_time_ms: float = 0.0
 
+@dataclass
+class FakeCRAGStrategy:
+    """Fake CRAG strategy used when CRAG is disabled."""
+    level: str = 'HIGH'
+    should_search_web: bool = False
+    avg_score: float = 0.0
+    num_low_score_docs: int = 0
+    web_search_count: int = 0
+
 # Singleton instances for expensive components
 _instance: Optional['RAGOrchestrator'] = None
+_instance_lock = threading.Lock()
 
 def get_orchestrator(api_key: str = None, chroma_path: str = None) -> 'RAGOrchestrator':
-    """Get or create singleton RAGOrchestrator instance."""
+    """Get or create singleton RAGOrchestrator instance (thread-safe)."""
     global _instance
     if _instance is None:
-        _instance = RAGOrchestrator(api_key, chroma_path)
+        with _instance_lock:
+            # Double-check locking pattern
+            if _instance is None:
+                _instance = RAGOrchestrator(api_key, chroma_path)
     return _instance
 
 class RAGOrchestrator:
@@ -46,7 +62,7 @@ class RAGOrchestrator:
         self.crag_judge = CRAGJudge()
         self.graphrag_query = GraphRAGQuery(api_key)
         self.parent_retriever = ParentDocumentRetriever()
-        self.answer_generator = AnswerGenerator(api_key)
+        self.answer_generator = AnswerGenerator()
 
         # Storage
         self.chroma_path = chroma_path or str(Path(__file__).parent.parent.parent / 'chroma_db')
@@ -75,9 +91,10 @@ class RAGOrchestrator:
               use_parent_doc: bool = True,
               use_graphrag: bool = True,
               use_crag: bool = True,
-              top_k_operators: int = 10,
-              top_k_stories: int = 10,
-              top_k_knowledge: int = 10,
+              top_k_operators: int = 8,
+              top_k_stories: int = 8,
+              top_k_knowledge: int = 8,
+              top_k_per_channel: int = 8,
               rerank_top_k: int = 5) -> RAGAnswer:
         """Execute the full RAG pipeline.
 
@@ -87,9 +104,10 @@ class RAGOrchestrator:
             use_parent_doc: Whether to use parent document expansion
             use_graphrag: Whether to use knowledge graph query
             use_crag: Whether to use CRAG judge
-            top_k_operators: Top k for operators recall
-            top_k_stories: Top k for stories recall
-            top_k_knowledge: Top k for knowledge recall
+            top_k_operators: Top k for operators recall (deprecated, use top_k_per_channel)
+            top_k_stories: Top k for stories recall (deprecated, use top_k_per_channel)
+            top_k_knowledge: Top k for knowledge recall (deprecated, use top_k_per_channel)
+            top_k_per_channel: Top k per collection for initial recall
             rerank_top_k: Top k for reranking
 
         Returns:
@@ -114,80 +132,166 @@ class RAGOrchestrator:
         # Step 1: Query rewriting (may return multiple sub-queries)
         step_start = time.time()
         input_data_step1 = {'question': question, 'history': history}
-        sub_queries = self.query_rewriter.rewrite(question, history)
+        rewrite_result = self.query_rewriter.rewrite(question, history)
         step_time = round((time.time() - step_start) * 1000)
-        add_step('Query Rewrite', '查询改写', step_time,
-                 f'改写为 {len(sub_queries)} 个查询' if len(sub_queries) > 1 else '单查询',
-                 input_data=input_data_step1,
-                 output_data={'sub_queries': sub_queries})
 
-        # Step 2: Multi-channel recall
-        step_start = time.time()
+        needs_retrieval = rewrite_result.get('needs_retrieval', True)
+        is_relation_query = rewrite_result.get('is_relation_query', False)
+        add_step('Query Rewrite', '查询改写', step_time,
+                 f'无需检索，直接回答' if not needs_retrieval else f'需要检索，改写为 {len(rewrite_result.get("queries", []))} 个查询',
+                 input_data=input_data_step1,
+                 output_data={
+                     'needs_retrieval': needs_retrieval,
+                     'reason': rewrite_result.get('reason', ''),
+                     'sub_queries': rewrite_result.get('queries', [question]),
+                     'is_relation_query': is_relation_query
+                 })
+
+        # If no retrieval needed, use LLM's direct answer
+        if not needs_retrieval:
+            total_time = round((time.time() - total_start) * 1000)
+            return RAGAnswer(
+                answer=rewrite_result.get('answer', ''),
+                crag_level='DIRECT',
+                avg_score=1.0,
+                num_docs_used=0,
+                used_web_search=False,
+                graph_results=None,
+                retrieved_documents=[],
+                pipeline_steps=pipeline_steps,
+                total_time_ms=total_time
+            )
+
+        sub_queries = rewrite_result.get('queries', [question])
+        detected_operators = rewrite_result.get('detected_operators', [])
+
+        # Step 2: Multi-Channel Recall + GraphRAG (parallel execution)
         self._load_bm25_indexes()
         total_recall = top_k_operators + top_k_stories + top_k_knowledge
-        recall_input = {'query': sub_queries[0] if len(sub_queries) == 1 else sub_queries,
-                       'top_k_per_channel': max(top_k_operators, top_k_stories, top_k_knowledge),
-                       'final_top_k': total_recall}
 
-        if len(sub_queries) == 1:
-            recall_results = multi_channel_recall(
-                query=sub_queries[0],
-                chroma_client=self.chroma,
-                bm25_indexes=self._bm25_indexes,
-                top_k_per_channel=max(top_k_operators, top_k_stories, top_k_knowledge),
-                final_top_k=total_recall
-            )
-        else:
-            all_recall = []
-            for sq in sub_queries:
-                results = multi_channel_recall(
-                    query=sq,
+        # Define recall function
+        def perform_recall():
+            recall_start = time.time()
+            if len(sub_queries) == 1:
+                recall_results = multi_channel_recall(
+                    query=sub_queries[0],
                     chroma_client=self.chroma,
                     bm25_indexes=self._bm25_indexes,
-                    top_k_per_channel=max(top_k_operators, top_k_stories, top_k_knowledge),
-                    final_top_k=total_recall
+                    top_k_per_channel=top_k_per_channel,
+                    final_top_k=total_recall,
+                    rrf_k=60,
+                    vector_weight=getattr(config, 'VECTOR_WEIGHT', 0.5)
                 )
-                all_recall.extend(results)
+            else:
+                all_recall = []
+                for sq in sub_queries:
+                    results = multi_channel_recall(
+                        query=sq,
+                        chroma_client=self.chroma,
+                        bm25_indexes=self._bm25_indexes,
+                        top_k_per_channel=top_k_per_channel,
+                        final_top_k=total_recall,
+                        rrf_k=60,
+                        vector_weight=getattr(config, 'VECTOR_WEIGHT', 0.5)
+                    )
+                    all_recall.extend(results)
 
-            seen = set()
-            recall_results = []
-            for r in all_recall:
-                cid = r.get('chunk_id', '')
-                if cid not in seen:
-                    seen.add(cid)
-                    recall_results.append(r)
+                seen = set()
+                recall_results = []
+                for r in all_recall:
+                    cid = r.get('chunk_id', '')
+                    if cid not in seen:
+                        seen.add(cid)
+                        recall_results.append(r)
+            recall_time = round((time.time() - recall_start) * 1000)
+            return recall_results, recall_time
 
+        # Define GraphRAG function (only if it's a relation query)
+        graph_results = None
+        graph_time = 0
+        if use_graphrag and is_relation_query:
+            def perform_graphrag():
+                graph_start = time.time()
+                graph_results = self.graphrag_query.query_with_flags(
+                    question=question,
+                    is_relation_query=True,
+                    detected_operators=detected_operators
+                )
+                graph_time = round((time.time() - graph_start) * 1000)
+                return graph_results, graph_time
+        else:
+            def perform_graphrag():
+                return {'is_relation_query': False, 'results': []}, 0
+
+        # Execute recall and GraphRAG in parallel
+        step_start = time.time()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            recall_future = executor.submit(perform_recall)
+            graph_future = executor.submit(perform_graphrag)
+
+            # Wait for recall results first (needed for next steps)
+            recall_results, recall_time = recall_future.result()
+
+            # Get GraphRAG results (already completed or will wait)
+            graph_results, graph_time = graph_future.result()
+
+        step_parallel_time = round((time.time() - step_start) * 1000)
+
+        # Record recall step
+        recall_input = {'query': sub_queries[0] if len(sub_queries) == 1 else sub_queries,
+                       'top_k_per_channel': top_k_per_channel,
+                       'final_top_k': total_recall}
         recall_output = [{'chunk_id': r.get('chunk_id', ''), 'content': r.get('content', ''),
                         'score': r.get('score', 0), 'source': r.get('source', '')}
                        for r in recall_results]
-        step_time = round((time.time() - step_start) * 1000)
-        add_step('Multi-Channel Recall', '多通道召回', step_time, f'召回 {len(recall_results)} 个文档',
+        add_step('Multi-Channel Recall', '多通道召回', recall_time, f'召回 {len(recall_results)} 个文档',
                  input_data=recall_input,
                  output_data={'total_recalled': len(recall_results), 'top_results': recall_output})
+
+        # Record GraphRAG step (if executed)
+        if use_graphrag:
+            if is_relation_query:
+                graph_desc = f'检测到关系查询，找到 {len(graph_results.get("results", []))} 条关系' if graph_results and graph_results.get('is_relation_query') else '非关系查询'
+            else:
+                graph_desc = '非关系查询（根据查询改写结果跳过）'
+            add_step('GraphRAG Query', '知识图谱查询', graph_time, graph_desc,
+                     input_data={'question': question, 'use_graphrag': True, 'is_relation_query': is_relation_query},
+                     output_data={'is_relation_query': graph_results.get('is_relation_query') if graph_results else False,
+                                 'num_results': len(graph_results.get('results', [])) if graph_results else 0,
+                                 'results': graph_results.get('results', []) if graph_results else []})
 
         # Step 3: Cross-encoder rerank
         step_start = time.time()
         doc_texts = [r.get('content', '') for r in recall_results]
         doc_metadatas = [{'source_file': r.get('metadata', {}).get('source_file', ''), 'chunk_id': r.get('chunk_id', '')} for r in recall_results]
 
-        # Each sub-query gets rerank_top_k results, then combine with deduplication
+        # Rerank with all sub-queries and merge results
         all_reranked = []
-        seen_chunk_ids = set()
         for sq in sub_queries:
-            reranked = self.reranker.rerank(sq, doc_texts, top_k=rerank_top_k)
-            for r in reranked:
-                idx = r['index']
-                chunk_id = doc_metadatas[idx].get('chunk_id', '')
-                if chunk_id not in seen_chunk_ids:
-                    seen_chunk_ids.add(chunk_id)
-                    all_reranked.append({
-                        'content': doc_texts[idx] if idx < len(doc_texts) else '',
-                        'relevance_score': r['relevance_score'],
-                        'chunk_id': chunk_id,
-                        'metadata': {'source_file': doc_metadatas[idx].get('source_file', '')}
-                    })
+            reranked_for_query = self.reranker.rerank(sq, doc_texts, top_k=rerank_top_k)
+            all_reranked.extend(reranked_for_query)
 
-        reranked_results = all_reranked
+        # Deduplicate by index and sort by score descending
+        seen_indices = set()
+        unique_reranked = []
+        for r in sorted(all_reranked, key=lambda x: x['relevance_score'], reverse=True):
+            if r['index'] not in seen_indices:
+                seen_indices.add(r['index'])
+                unique_reranked.append(r)
+                if len(unique_reranked) >= rerank_top_k:
+                    break
+
+        # Build reranked results
+        reranked_results = []
+        for r in unique_reranked:
+            idx = r['index']
+            chunk_id = doc_metadatas[idx].get('chunk_id', '')
+            reranked_results.append({
+                'content': doc_texts[idx] if idx < len(doc_texts) else '',
+                'relevance_score': r['relevance_score'],
+                'chunk_id': chunk_id,
+                'metadata': {'source_file': doc_metadatas[idx].get('source_file', '')}
+            })
 
         rerank_output = [{'chunk_id': r.get('chunk_id', ''), 'relevance_score': r.get('relevance_score', 0)}
                         for r in reranked_results]
@@ -210,36 +314,11 @@ class RAGOrchestrator:
                                  'num_low_score_docs': crag_strategy.num_low_score_docs,
                                  'web_search_count': crag_strategy.web_search_count})
         else:
-            from dataclasses import dataclass
             # Calculate actual average score from reranked results when CRAG is disabled
             avg_score = sum(r.get('relevance_score', 0) for r in reranked_results) / len(reranked_results) if reranked_results else 0.0
-            @dataclass
-            class FakeStrategy:
-                level: str = 'HIGH'
-                should_search_web: bool = False
-                avg_score: float = 0.0
-                num_low_score_docs: int = 0
-                web_search_count: int = 0
-            crag_strategy = FakeStrategy()
-            crag_strategy.avg_score = avg_score
+            crag_strategy = FakeCRAGStrategy(avg_score=avg_score)
 
-        # Step 5: GraphRAG for relationship questions (optional)
-        graph_results = None
-        if use_graphrag:
-            step_start = time.time()
-            graph_results = self.graphrag_query.query(question)
-            step_time = round((time.time() - step_start) * 1000)
-            if graph_results and graph_results.get('is_relation_query'):
-                graph_desc = f'检测到关系查询，找到 {len(graph_results.get("results", []))} 条关系'
-            else:
-                graph_desc = '非关系查询'
-            add_step('GraphRAG Query', '知识图谱查询', step_time, graph_desc,
-                     input_data={'question': question, 'use_graphrag': True},
-                     output_data={'is_relation_query': graph_results.get('is_relation_query') if graph_results else False,
-                                 'num_results': len(graph_results.get('results', [])) if graph_results else 0,
-                                 'results': graph_results.get('results', []) if graph_results else []})
-
-        # Step 6: Parent document retrieval (optional)
+        # Step 5: Parent document retrieval (optional)
         if use_parent_doc:
             step_start = time.time()
             for r in reranked_results:
@@ -255,43 +334,53 @@ class RAGOrchestrator:
                      input_data={'num_docs': len(reranked_results), 'use_parent_doc': True},
                      output_data={'expanded': True, 'num_docs': len(reranked_results)})
 
-        # Step 7: Web search supplement if needed (new CRAG logic)
+        # Step 6: Web search supplement if needed (replace low-score docs)
         step_start = time.time()
         web_results = None
         web_search_info = '跳过'
+        documents_for_answer = reranked_results  # 默认使用重排结果
+
         if crag_strategy and crag_strategy.should_search_web:
             try:
                 N = crag_strategy.num_low_score_docs
                 search_count = crag_strategy.web_search_count
 
+                # 限制搜索数量最多为3
+                search_count = min(search_count, 3)
+
                 if N > 0 and search_count > 0:
-                    # Search N*2 web results
-                    web_raw = self.client.search(main_query)
+                    # 搜索网络结果，数量为search_count
+                    web_raw = self.client.search(question, limit=search_count)
 
                     if web_raw:
-                        # Extract text content from web results for reranking
-                        web_texts = [r.get('snippet', '') for r in web_raw]  # No truncation - 8k context
+                        # 构建网络结果
+                        web_results = []
+                        max_results = min(N, search_count, len(web_raw))
+                        for i in range(max_results):
+                            web_results.append({
+                                'title': web_raw[i].get('title', ''),
+                                'url': web_raw[i].get('url', ''),
+                                'snippet': web_raw[i].get('snippet', ''),
+                                'source': 'web_search'
+                            })
 
-                        # Rerank web results
-                        if web_texts:
-                            web_reranked = self.reranker.rerank(main_query, web_texts, top_k=min(search_count, len(web_texts)))
+                        # 用网络结果替换低分文档
+                        doc_threshold = self.crag_judge.doc_threshold
+                        replaced_count = 0
+                        for i, doc in enumerate(documents_for_answer):
+                            if doc.get('relevance_score', 1.0) < doc_threshold and replaced_count < len(web_results):
+                                documents_for_answer[i] = {
+                                    'content': f"[网络来源] {web_results[replaced_count]['title']}\n{web_results[replaced_count]['snippet']}",
+                                    'relevance_score': 0.5,  # 给一个中等分数表示可用
+                                    'source': 'web_search',
+                                    'metadata': {
+                                        'source_file': web_results[replaced_count]['title'],
+                                        'url': web_results[replaced_count]['url']
+                                    }
+                                }
+                                replaced_count += 1
 
-                            # Take top N web results
-                            web_results = []
-                            for r in web_reranked[:N]:
-                                idx = r['index']
-                                if idx < len(web_raw):
-                                    web_results.append({
-                                        'title': web_raw[idx].get('title', ''),
-                                        'url': web_raw[idx].get('url', ''),
-                                        'snippet': web_raw[idx].get('snippet', ''),
-                                        'relevance_score': r['relevance_score'],
-                                        'source': 'web_search'
-                                    })
-
-                            web_search_info = f'补充 {N} 篇网络结果'
-                        else:
-                            web_search_info = '无网络结果'
+                        web_search_info = f'替换 {replaced_count} 篇低分文档为网络结果'
                     else:
                         web_search_info = '搜索失败'
                 else:
@@ -305,18 +394,20 @@ class RAGOrchestrator:
                  output_data={'web_results_count': len(web_results) if web_results else 0,
                              'search_info': web_search_info})
 
-        # Step 8: Generate answer
+        # Step 7: Generate answer
         step_start = time.time()
         answer = self.answer_generator.generate(
             question=question,
-            documents=reranked_results,
+            documents=documents_for_answer,
             crag_level=crag_strategy.level if crag_strategy else 'HIGH',
             web_results=web_results,
-            graph_results=graph_results if (graph_results and graph_results.get('is_relation_query')) else None
+            graph_results=graph_results if (graph_results and graph_results.get('is_relation_query')) else None,
+            history=history,
+            max_documents=rerank_top_k
         )
         step_time = round((time.time() - step_start) * 1000)
         add_step('Answer Generation', '答案生成', step_time, '生成最终回答',
-                 input_data={'question': question, 'num_docs': len(reranked_results),
+                 input_data={'question': question, 'num_docs': len(documents_for_answer),
                             'crag_level': crag_strategy.level if crag_strategy else 'HIGH',
                             'has_web_results': bool(web_results),
                             'has_graph_results': bool(graph_results and graph_results.get('is_relation_query'))},
@@ -328,10 +419,10 @@ class RAGOrchestrator:
             answer=answer,
             crag_level=crag_strategy.level,
             avg_score=crag_strategy.avg_score,
-            num_docs_used=len(reranked_results),
+            num_docs_used=len(documents_for_answer),
             used_web_search=crag_strategy.should_search_web,
             graph_results=graph_results if (graph_results and graph_results.get('is_relation_query')) else None,
-            retrieved_documents=reranked_results,
+            retrieved_documents=documents_for_answer,
             pipeline_steps=pipeline_steps,
             total_time_ms=total_time
         )
@@ -344,7 +435,8 @@ class RAGOrchestrator:
                        top_k_operators: int = 10,
                        top_k_stories: int = 10,
                        top_k_knowledge: int = 10,
-                       rerank_top_k: int = 5) -> Dict[str, Any]:
+                       rerank_top_k: int = 5,
+              top_k_per_channel: int = 8) -> Dict[str, Any]:
         """Run a specific RAG step and return its output.
 
         Args:
@@ -355,9 +447,10 @@ class RAGOrchestrator:
             use_parent_doc: Whether to use parent document expansion
             use_graphrag: Whether to use knowledge graph query
             use_crag: Whether to use CRAG judge
-            top_k_operators: Top k for operators recall
-            top_k_stories: Top k for stories recall
-            top_k_knowledge: Top k for knowledge recall
+            top_k_operators: Top k for operators recall (deprecated, use top_k_per_channel)
+            top_k_stories: Top k for stories recall (deprecated, use top_k_per_channel)
+            top_k_knowledge: Top k for knowledge recall (deprecated, use top_k_per_channel)
+            top_k_per_channel: Top k per collection for initial recall
             rerank_top_k: Top k for reranking
 
         Returns:
@@ -386,12 +479,20 @@ class RAGOrchestrator:
         crag_strategy = None
         graph_results = None
         web_results = None
+        is_relation_query_global = False
+        detected_operators_global = []
 
         # Reconstruct state from previous results
         if previous_results:
             for prev_step, prev_output in previous_results.items():
                 if prev_step == 1:
-                    sub_queries = prev_output if isinstance(prev_output, list) else [prev_output]
+                    # Step 1 returns dict with queries, is_relation_query, detected_operators
+                    if isinstance(prev_output, dict):
+                        sub_queries = prev_output.get('queries', [question])
+                        is_relation_query_global = prev_output.get('is_relation_query', False)
+                        detected_operators_global = prev_output.get('detected_operators', [])
+                    else:
+                        sub_queries = [prev_output] if prev_output else [question]
                 elif prev_step == 2:
                     # Ensure it's a list, not a string or other type
                     recall_results = prev_output if isinstance(prev_output, list) else None
@@ -401,29 +502,17 @@ class RAGOrchestrator:
                 elif prev_step == 4:
                     # CRAG result
                     if isinstance(prev_output, dict):
-                        from dataclasses import dataclass
-                        @dataclass
-                        class FakeStrategy:
-                            level: str = 'HIGH'
-                            should_search_web: bool = False
-                            avg_score: float = 0.0
-                            num_low_score_docs: int = 0
-                            web_search_count: int = 0
-                        crag_strategy = FakeStrategy()
-                        if 'level' in prev_output:
-                            crag_strategy.level = prev_output['level']
-                        if 'should_search_web' in prev_output:
-                            crag_strategy.should_search_web = prev_output['should_search_web']
-                        if 'avg_score' in prev_output:
-                            crag_strategy.avg_score = prev_output['avg_score']
-                        if 'num_low_score_docs' in prev_output:
-                            crag_strategy.num_low_score_docs = prev_output['num_low_score_docs']
-                        if 'web_search_count' in prev_output:
-                            crag_strategy.web_search_count = prev_output['web_search_count']
+                        crag_strategy = FakeCRAGStrategy(
+                            level=prev_output.get('level', 'HIGH'),
+                            should_search_web=prev_output.get('should_search_web', False),
+                            avg_score=prev_output.get('avg_score', 0.0),
+                            num_low_score_docs=prev_output.get('num_low_score_docs', 0),
+                            web_search_count=prev_output.get('web_search_count', 0)
+                        )
                     else:
                         crag_strategy = prev_output if not isinstance(prev_output, str) else None
                 elif prev_step == 5:
-                    # Ensure it's a dict, not a string
+                    # GraphRAG result
                     graph_results = prev_output if isinstance(prev_output, dict) else None
                 elif prev_step == 6:
                     # Parent doc returns {'expanded': True, 'num_docs': N, 'documents': [...]}
@@ -455,7 +544,7 @@ class RAGOrchestrator:
                     query=query,
                     chroma_client=self.chroma,
                     bm25_indexes=self._bm25_indexes,
-                    top_k_per_channel=max(top_k_operators, top_k_stories, top_k_knowledge),
+                    top_k_per_channel=top_k_per_channel,
                     final_top_k=top_k_operators + top_k_stories + top_k_knowledge
                 )
                 result['input_data'] = {'query': query}
@@ -483,18 +572,9 @@ class RAGOrchestrator:
                 if not reranked_results:
                     raise ValueError('Step 3 (rerank) must be executed first')
                 if not use_crag:
-                    from dataclasses import dataclass
                     # Calculate actual average score from reranked results when CRAG is disabled
                     avg_score = sum(r.get('relevance_score', 0) for r in reranked_results) / len(reranked_results) if reranked_results else 0.0
-                    @dataclass
-                    class FakeStrategy:
-                        level: str = 'HIGH'
-                        should_search_web: bool = False
-                        avg_score: float = 0.0
-                        num_low_score_docs: int = 0
-                        web_search_count: int = 0
-                    output = FakeStrategy()
-                    output.avg_score = avg_score
+                    output = FakeCRAGStrategy(avg_score=avg_score)
                 else:
                     output = self.crag_judge.judge(reranked_results)
                 result['input_data'] = {'num_docs': len(reranked_results)}
@@ -512,12 +592,19 @@ class RAGOrchestrator:
                     result['input_data'] = {'question': question}
                     result['output_data'] = {'disabled': True, 'message': '知识图谱已禁用'}
                 else:
-                    output = self.graphrag_query.query(question)
-                    result['input_data'] = {'question': question}
+                    # Use is_relation_query and detected_operators from step 1 rewrite result
+                    output = self.graphrag_query.query_with_flags(
+                        question=question,
+                        is_relation_query=is_relation_query_global,
+                        detected_operators=detected_operators_global
+                    )
+                    result['input_data'] = {'question': question, 'is_relation_query': is_relation_query_global}
                     result['output_data'] = {
                         'is_relation_query': output.get('is_relation_query', False) if output else False,
-                        'num_results': len(output.get('results', [])) if output else 0
+                        'num_results': len(output.get('results', [])) if output else 0,
+                        'results': output.get('results', []) if output else []
                     }
+                    graph_results = output
 
             elif step == 6:
                 # Parent document
@@ -564,7 +651,9 @@ class RAGOrchestrator:
                     documents=reranked_results or [],
                     crag_level=crag_strategy.level if crag_strategy else 'HIGH',
                     web_results=web_results,
-                    graph_results=graph_results if (graph_results and graph_results.get('is_relation_query')) else None
+                    graph_results=graph_results if (graph_results and graph_results.get('is_relation_query')) else None,
+                    history=history,
+                    max_documents=rerank_top_k
                 )
                 result['input_data'] = {
                     'question': question,
@@ -585,304 +674,3 @@ class RAGOrchestrator:
 
         return result
 
-    def query_stream(self, question: str, conversation_history: List[Dict] = None,
-                     use_parent_doc: bool = True,
-                     use_graphrag: bool = True,
-                     use_crag: bool = True,
-                     top_k_operators: int = 10,
-                     top_k_stories: int = 10,
-                     top_k_knowledge: int = 10,
-                     rerank_top_k: int = 5):
-        """Execute the full RAG pipeline with streaming.
-
-        Yields SSE events for each step and then streams the answer.
-
-        Args:
-            question: User question
-            conversation_history: Optional list of previous {role, content} dicts
-            use_parent_doc: Whether to use parent document expansion
-            use_graphrag: Whether to use knowledge graph query
-            use_crag: Whether to use CRAG judge
-            top_k_operators: Top k for operators recall
-            top_k_stories: Top k for stories recall
-            top_k_knowledge: Top k for knowledge recall
-            rerank_top_k: Top k for reranking
-
-        Yields:
-            SSE-formatted event strings
-        """
-        import json
-        history = conversation_history or []
-
-        def sse_event(event_type: str, data: dict):
-            return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-        total_start = time.time()
-
-        # Step 1: Query rewriting
-        step_start = time.time()
-        sub_queries = self.query_rewriter.rewrite(question, history)
-        step_time = round((time.time() - step_start) * 1000)
-        yield sse_event('step', {
-            'step': 1,
-            'name': 'Query Rewrite',
-            'name_cn': '查询改写',
-            'time_ms': step_time,
-            'description': f'改写为 {len(sub_queries)} 个查询' if len(sub_queries) > 1 else '单查询',
-            'input_data': {'question': question, 'history': history},
-            'output_data': {'sub_queries': sub_queries}
-        })
-
-        # Step 2: Multi-channel recall
-        step_start = time.time()
-        self._load_bm25_indexes()
-        total_recall = top_k_operators + top_k_stories + top_k_knowledge
-
-        if len(sub_queries) == 1:
-            recall_results = multi_channel_recall(
-                query=sub_queries[0],
-                chroma_client=self.chroma,
-                bm25_indexes=self._bm25_indexes,
-                top_k_per_channel=max(top_k_operators, top_k_stories, top_k_knowledge),
-                final_top_k=total_recall
-            )
-        else:
-            all_recall = []
-            for sq in sub_queries:
-                results = multi_channel_recall(
-                    query=sq,
-                    chroma_client=self.chroma,
-                    bm25_indexes=self._bm25_indexes,
-                    top_k_per_channel=max(top_k_operators, top_k_stories, top_k_knowledge),
-                    final_top_k=total_recall
-                )
-                all_recall.extend(results)
-
-            seen = set()
-            recall_results = []
-            for r in all_recall:
-                cid = r.get('chunk_id', '')
-                if cid not in seen:
-                    seen.add(cid)
-                    recall_results.append(r)
-
-        step_time = round((time.time() - step_start) * 1000)
-        recall_output = [{'chunk_id': r.get('chunk_id', ''), 'content': r.get('content', ''),
-                        'score': r.get('score', 0), 'source': r.get('source', '')}
-                       for r in recall_results]
-        yield sse_event('step', {
-            'step': 2,
-            'name': 'Multi-Channel Recall',
-            'name_cn': '多通道召回',
-            'time_ms': step_time,
-            'description': f'召回 {len(recall_results)} 个文档',
-            'input_data': {'query': sub_queries[0] if len(sub_queries) == 1 else sub_queries,
-                          'top_k_per_channel': max(top_k_operators, top_k_stories, top_k_knowledge),
-                          'final_top_k': total_recall},
-            'output_data': {'total_recalled': len(recall_results), 'top_results': recall_output}
-        })
-
-        # Step 3: Cross-encoder rerank
-        step_start = time.time()
-        doc_texts = [r.get('content', '') for r in recall_results]
-        doc_metadatas = [{'source_file': r.get('metadata', {}).get('source_file', ''), 'chunk_id': r.get('chunk_id', '')} for r in recall_results]
-
-        # Each sub-query gets rerank_top_k results, then combine with deduplication
-        all_reranked = []
-        seen_chunk_ids = set()
-        for sq in sub_queries:
-            reranked = self.reranker.rerank(sq, doc_texts, top_k=rerank_top_k)
-            for r in reranked:
-                idx = r['index']
-                chunk_id = doc_metadatas[idx].get('chunk_id', '')
-                if chunk_id not in seen_chunk_ids:
-                    seen_chunk_ids.add(chunk_id)
-                    all_reranked.append({
-                        'content': doc_texts[idx] if idx < len(doc_texts) else '',
-                        'relevance_score': r['relevance_score'],
-                        'chunk_id': chunk_id,
-                        'metadata': {'source_file': doc_metadatas[idx].get('source_file', '')}
-                    })
-
-        reranked_results = all_reranked
-
-        step_time = round((time.time() - step_start) * 1000)
-        rerank_output = [{'chunk_id': r.get('chunk_id', ''), 'relevance_score': r.get('relevance_score', 0)}
-                        for r in reranked_results]
-        yield sse_event('step', {
-            'step': 3,
-            'name': 'Cross-Encoder Rerank',
-            'name_cn': '交叉编码重排',
-            'time_ms': step_time,
-            'description': f'重排后保留 {len(reranked_results)} 个文档',
-            'input_data': {'num_queries': len(sub_queries), 'num_docs': len(doc_texts), 'rerank_top_k': rerank_top_k, 'queries': sub_queries},
-            'output_data': {'reranked': rerank_output}
-        })
-
-        # Step 4: CRAG judge
-        crag_strategy = None
-        if use_crag:
-            step_start = time.time()
-            crag_strategy = self.crag_judge.judge(reranked_results)
-            step_time = round((time.time() - step_start) * 1000)
-            yield sse_event('step', {
-                'step': 4,
-                'name': 'CRAG Judge',
-                'name_cn': 'CRAG 判断',
-                'time_ms': step_time,
-                'description': f'等级: {crag_strategy.level}, 分数: {crag_strategy.avg_score:.3f}',
-                'input_data': {'num_docs': len(reranked_results), 'use_crag': True},
-                'output_data': {'level': crag_strategy.level, 'avg_score': crag_strategy.avg_score,
-                               'should_search_web': crag_strategy.should_search_web,
-                               'num_low_score_docs': crag_strategy.num_low_score_docs,
-                               'web_search_count': crag_strategy.web_search_count}
-            })
-        else:
-            from dataclasses import dataclass
-            @dataclass
-            class FakeStrategy:
-                level: str = 'HIGH'
-                should_search_web: bool = False
-                avg_score: float = 0.0
-                num_low_score_docs: int = 0
-                web_search_count: int = 0
-            crag_strategy = FakeStrategy()
-
-        # Step 5: GraphRAG
-        graph_results = None
-        if use_graphrag:
-            step_start = time.time()
-            graph_results = self.graphrag_query.query(question)
-            step_time = round((time.time() - step_start) * 1000)
-            if graph_results and graph_results.get('is_relation_query'):
-                graph_desc = f'检测到关系查询，找到 {len(graph_results.get("results", []))} 条关系'
-            else:
-                graph_desc = '非关系查询'
-            yield sse_event('step', {
-                'step': 5,
-                'name': 'GraphRAG Query',
-                'name_cn': '知识图谱查询',
-                'time_ms': step_time,
-                'description': graph_desc,
-                'input_data': {'question': question, 'use_graphrag': True},
-                'output_data': {'is_relation_query': graph_results.get('is_relation_query') if graph_results else False,
-                               'num_results': len(graph_results.get('results', [])) if graph_results else 0,
-                               'results': graph_results.get('results', [])[:5] if graph_results else []}
-            })
-
-        # Step 6: Parent document
-        if use_parent_doc:
-            step_start = time.time()
-            for r in reranked_results:
-                chunk_id = r.get('chunk_id', '')
-                if chunk_id.startswith('operators_'):
-                    parent = self.parent_retriever.get_parent_content(r, 'operators')
-                    r['content'] = parent
-                elif chunk_id.startswith('stories_'):
-                    parent = self.parent_retriever.get_parent_content(r, 'stories')
-                    r['content'] = parent
-            step_time = round((time.time() - step_start) * 1000)
-            yield sse_event('step', {
-                'step': 6,
-                'name': 'Parent Document',
-                'name_cn': 'Parent文档扩展',
-                'time_ms': step_time,
-                'description': '扩展文档内容',
-                'input_data': {'num_docs': len(reranked_results), 'use_parent_doc': True},
-                'output_data': {'expanded': True, 'num_docs': len(reranked_results)}
-            })
-
-        # Step 7: Web search
-        step_start = time.time()
-        web_results = None
-        web_search_info = '跳过'
-        if crag_strategy and crag_strategy.should_search_web:
-            try:
-                N = crag_strategy.num_low_score_docs
-                search_count = crag_strategy.web_search_count
-
-                if N > 0 and search_count > 0:
-                    web_raw = self.client.search(main_query)
-
-                    if web_raw:
-                        web_texts = [r.get('snippet', '') for r in web_raw]
-
-                        if web_texts:
-                            web_reranked = self.reranker.rerank(main_query, web_texts, top_k=min(search_count, len(web_texts)))
-
-                            web_results = []
-                            for r in web_reranked[:N]:
-                                idx = r['index']
-                                if idx < len(web_raw):
-                                    web_results.append({
-                                        'title': web_raw[idx].get('title', ''),
-                                        'url': web_raw[idx].get('url', ''),
-                                        'snippet': web_raw[idx].get('snippet', ''),
-                                        'relevance_score': r['relevance_score'],
-                                        'source': 'web_search'
-                                    })
-
-                            web_search_info = f'补充 {N} 篇网络结果'
-                        else:
-                            web_search_info = '无网络结果'
-                    else:
-                        web_search_info = '搜索失败'
-                else:
-                    web_search_info = '无需补充'
-
-            except Exception as e:
-                web_search_info = f'搜索异常: {str(e)[:20]}'
-        step_time = round((time.time() - step_start) * 1000)
-        yield sse_event('step', {
-            'step': 7,
-            'name': 'Web Search',
-            'name_cn': '网络搜索',
-            'time_ms': step_time,
-            'description': web_search_info,
-            'input_data': {'should_search_web': crag_strategy.should_search_web if crag_strategy else False},
-            'output_data': {'web_results_count': len(web_results) if web_results else 0, 'search_info': web_search_info}
-        })
-
-        # Step 8: Generate answer (streaming)
-        step_start = time.time()
-        yield sse_event('step', {
-            'step': 8,
-            'name': 'Answer Generation',
-            'name_cn': '答案生成',
-            'time_ms': 0,
-            'description': '流式生成中...',
-            'input_data': {'question': question, 'num_docs': len(reranked_results),
-                          'crag_level': crag_strategy.level if crag_strategy else 'HIGH',
-                          'has_web_results': bool(web_results),
-                          'has_graph_results': bool(graph_results and graph_results.get('is_relation_query'))},
-            'output_data': {'status': 'streaming'}
-        })
-
-        # Stream the answer
-        full_answer = []
-        for chunk in self.answer_generator.generate_stream(
-            question=question,
-            documents=reranked_results,
-            crag_level=crag_strategy.level if crag_strategy else 'HIGH',
-            web_results=web_results,
-            graph_results=graph_results if (graph_results and graph_results.get('is_relation_query')) else None
-        ):
-            full_answer.append(chunk)
-            yield sse_event('answer_chunk', {'chunk': chunk})
-
-        final_answer = ''.join(full_answer)
-        step_time = round((time.time() - step_start) * 1000)
-        total_time = round((time.time() - total_start) * 1000)
-
-        # Send final summary
-        yield sse_event('done', {
-            'answer': final_answer,
-            'crag_level': crag_strategy.level if crag_strategy else 'HIGH',
-            'avg_score': crag_strategy.avg_score if crag_strategy else 1.0,
-            'num_docs_used': len(reranked_results),
-            'used_web_search': crag_strategy.should_search_web if crag_strategy else False,
-            'graph_results': graph_results if (graph_results and graph_results.get('is_relation_query')) else None,
-            'retrieved_documents': reranked_results,
-            'total_time_ms': total_time,
-            'step_8_time_ms': step_time
-        })

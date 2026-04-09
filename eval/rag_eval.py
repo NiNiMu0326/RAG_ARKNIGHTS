@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 # Try to import siliconflow for LLM calls
 try:
     from backend.api.siliconflow import SiliconFlowClient
+    import config
     SILICONFLOW_AVAILABLE = True
 except ImportError:
     SILICONFLOW_AVAILABLE = False
@@ -43,6 +44,8 @@ AI助手回答：{answer}
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.client = SiliconFlowClient(api_key) if SILICONFLOW_AVAILABLE else None
+        # Use configured LLM model, fallback to qwen for evaluation
+        self.eval_model = getattr(config, 'DEEPSEEK_LLM_MODEL', 'deepseek-chat')
 
     def evaluate(self, question: str, answer: str, expected_keywords: List[str]) -> Dict[str, Any]:
         """Evaluate a single RAG answer"""
@@ -62,7 +65,7 @@ AI助手回答：{answer}
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
-                model="qwen/qwen2.5-7b-instruct",
+                model=self.eval_model,
                 temperature=0.1
             )
 

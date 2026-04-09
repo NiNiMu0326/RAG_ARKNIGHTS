@@ -153,7 +153,7 @@ class EntityExtractor:
 [{{"entity": "干员名", "type": "干员"}}, {{"source": "干员A", "target": "干员B", "relation": "关系", "description": "描述"}}]
 
 文档内容：
-{text[:3000]}
+{text[:8000]}
 
 要求：
 - 只抽取真实存在于文档中的关系
