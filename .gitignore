@@ -28,6 +28,7 @@ chunks/
 
 # Temporary directories
 .tmp/
+.pytest_cache/
 
 # Local data (keep for others to process)
 # data/  # Uncomment if you don't want to share the raw data

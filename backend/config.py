@@ -33,7 +33,7 @@ SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 # Model Settings (SiliconFlow - for embedding and reranking)
-EMBEDDING_MODEL = "BAAI/bge-m3"
+EMBEDDING_MODEL = "Pro/BAAI/bge-m3"
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 
 # Model Settings (DeepSeek - for chat/LLM)

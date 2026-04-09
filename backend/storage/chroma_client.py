@@ -116,5 +116,5 @@ class ChromaClientWrapper:
         try:
             coll = self.get_collection(collection_name)
             return coll.count()
-        except (ValueError, chromadb.errors.InvalidCollectionError):
+        except (ValueError, chromadb.errors.NotFoundError):
             return 0
