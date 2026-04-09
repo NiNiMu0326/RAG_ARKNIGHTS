@@ -24,7 +24,7 @@
 ### 1. 克隆代码
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/NiNiMu0326/RAG_ARKNIGHTS.git
 cd RAG_ARKNIGHTS
 ```
 
@@ -120,7 +120,7 @@ npm run dev
 
 ```bash
 # 1. 克隆项目
-git clone <repo-url>
+git clone https://github.com/NiNiMu0326/RAG_ARKNIGHTS.git
 cd RAG_ARKNIGHTS
 
 # 2. 配置环境变量
