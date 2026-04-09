@@ -32,7 +32,7 @@ class AnswerGenerator:
     def __init__(self, api_key: str = None):
         # Use official DeepSeek API for answer generation (faster)
         self.client = DeepSeekClient(api_key)
-        self.llm_model = "deepseek-chat"
+        self.llm_model = config.DEEPSEEK_LLM_MODEL
         self.api_key = api_key
 
     def _build_prompt(

@@ -37,7 +37,7 @@ EMBEDDING_MODEL = "BAAI/bge-m3"
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 
 # Model Settings (DeepSeek - for chat/LLM)
-DEEPSEEK_LLM_MODEL = "deepseek-chat"
+DEEPSEEK_LLM_MODEL = "deepseek-coder-chat"
 DEFAULT_TEMPERATURE = 0.7
 
 # CRAG Thresholds

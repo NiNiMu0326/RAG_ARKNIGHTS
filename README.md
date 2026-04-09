@@ -4,12 +4,13 @@
 
 ## 功能特性
 
+- **查询改写**：fast_rule 快速匹配 + Qwen LLM 精判
 - **多路召回**：向量 + BM25 混合检索 + 标准 RRF 融合
 - **Cross-Encoder Rerank**：BAAI/bge-reranker-v2-m3 精排
-- **CRAG**：自适应检索策略（HIGH/LOW 二分类，网络搜索自动补足）
-- **GraphRAG**：知识图谱关系查询（无需 LLM 判断）
-- **查询改写**：fast_rule 快速匹配 + Qwen LLM 精判
-- **Parent Document**：检索完整干员/剧情原文
+- **CRAG 判断**：HIGH/LOW 二分类，网络搜索自动补足低相关场景
+- **Parent Document**：扩展为完整干员/剧情原文
+- **知识图谱**：GraphRAG 实体关系查询
+- **答案生成**：DeepSeek-V3.2 生成最终回答
 - **Pipeline 详情**：显示 RAG 执行步骤及耗时
 - **动态问题**：从真实数据生成随机问题按钮
 
@@ -160,7 +161,7 @@ docker-compose down
 5. **CRAG 判断** - HIGH/LOW 二分类（低于阈值触发网络搜索）
 6. **Parent Document** - 扩展为完整干员/剧情原文
 7. **网络搜索** - CRAG LOW 时 Tavily 补充
-8. **答案生成** - DeepSeek-V3 生成最终回答
+8. **答案生成** - DeepSeek-V3.2 生成最终回答
 
 ## 参数配置
 
@@ -250,7 +251,7 @@ RAG_ARKNIGHTS/
 | 嵌入模型 | BAAI/bge-m3 (SiliconFlow) |
 | 重排模型 | BAAI/bge-reranker-v2-m3 (SiliconFlow) |
 | 查询改写 | Qwen/Qwen2.5-7B-Instruct (SiliconFlow) |
-| 答案生成 | deepseek-chat (DeepSeek API) |
+| 答案生成 | deepseek-coder-chat (DeepSeek-V3.2) |
 | 网络搜索 | Tavily |
 | 前端 | Vue.js 3 + Vite + Pinia |
 | 图谱可视化 | Cytoscape.js |
