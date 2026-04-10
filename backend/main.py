@@ -7,7 +7,6 @@ import os
 import json
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from datetime import datetime
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -15,19 +14,25 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, field_validator
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field, field_validator
 import uvicorn
 
 # Import RAG components
 from backend.rag.orchestrator import RAGOrchestrator, get_orchestrator
 from backend.config import (
-    BASE_DIR, CHUNKS_DIR, CHROMA_DIR, DATA_DIR,
+    BASE_DIR, CHUNKS_DIR, FAISS_INDEX_DIR, DATA_DIR,
     ENTITY_RELATIONS_FILE, EVAL_QUESTIONS_FILE, SILICONFLOW_API_KEY,
-    EMBEDDING_MODEL, RERANKER_MODEL, DEEPSEEK_LLM_MODEL
+    EMBEDDING_MODEL, RERANKER_MODEL, DEEPSEEK_LLM_MODEL, DEEPSEEK_API_KEY, LLM_MODEL,
 )
-import config
-from eval.rag_eval import LLMEvaluator, load_questions, run_evaluation
+import backend.config as config
+
+try:
+    from eval.rag_eval import LLMEvaluator, load_questions, run_evaluation
+    _eval_available = True
+except ImportError:
+    _eval_available = False
+    print("WARNING: eval.rag_eval not available, /eval endpoint will be disabled")
 
 # ============== FastAPI App ==============
 app = FastAPI(
@@ -45,26 +50,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Singleton orchestrator
-_orchestrator: Optional[RAGOrchestrator] = None
-
 def get_orch() -> RAGOrchestrator:
-    global _orchestrator
-    if _orchestrator is None:
-        _orchestrator = RAGOrchestrator(api_key=SILICONFLOW_API_KEY, chroma_path=str(CHROMA_DIR))
-    return _orchestrator
+    return get_orchestrator(
+        api_key=str(SILICONFLOW_API_KEY),
+        faiss_index_dir=str(FAISS_INDEX_DIR),
+        deepseek_api_key=str(DEEPSEEK_API_KEY)
+    )
 
 
 # ============== Request/Response Models ==============
 class QueryRequest(BaseModel):
     question: str
-    conversation_history: Optional[List[Dict[str, str]]] = []
+    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
     use_parent_doc: bool = True
     use_graphrag: bool = True
     use_crag: bool = True
-    top_k_operators: int = 8
-    top_k_stories: int = 8
-    top_k_knowledge: int = 8
     top_k_per_channel: int = 8
     rerank_top_k: int = 5
 
@@ -75,7 +75,7 @@ class QueryRequest(BaseModel):
             raise ValueError('question cannot be empty')
         return v.strip()
 
-    @field_validator('top_k_operators', 'top_k_stories', 'top_k_knowledge', 'top_k_per_channel', 'rerank_top_k')
+    @field_validator('top_k_per_channel', 'rerank_top_k')
     @classmethod
     def top_k_must_be_positive(cls, v: int) -> int:
         if v <= 0:
@@ -88,15 +88,12 @@ class QueryRequest(BaseModel):
 class StepDebugRequest(BaseModel):
     question: str
     step: int  # 1-8, which step to execute
-    conversation_history: Optional[List[Dict[str, str]]] = []
+    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
     # Previous step results (for step-by-step execution)
-    step_results: Optional[Dict[int, Any]] = {}  # {1: output1, 2: output2, ...}
+    step_results: Dict[int, Any] = Field(default_factory=dict)
     use_parent_doc: bool = True
     use_graphrag: bool = True
     use_crag: bool = True
-    top_k_operators: int = 8
-    top_k_stories: int = 8
-    top_k_knowledge: int = 8
     top_k_per_channel: int = 8
     rerank_top_k: int = 5
 
@@ -114,7 +111,7 @@ class StepDebugRequest(BaseModel):
             raise ValueError(f'step must be between 1 and 8, got {v}')
         return v
 
-    @field_validator('top_k_operators', 'top_k_stories', 'top_k_knowledge', 'rerank_top_k')
+    @field_validator('top_k_per_channel', 'rerank_top_k')
     @classmethod
     def top_k_must_be_positive(cls, v: int) -> int:
         if v <= 0:
@@ -131,8 +128,9 @@ class QueryResponse(BaseModel):
     num_docs_used: int
     used_web_search: bool
     retrieved_documents: Optional[List[Dict]] = None
+    retrieved_doc_ids: Optional[List[str]] = None  # 用于评估
     graph_results: Optional[Dict] = None
-    pipeline_steps: Optional[List[Dict]] = []
+    pipeline_steps: List[Dict] = Field(default_factory=list)
     total_time_ms: float = 0.0
 
 
@@ -145,7 +143,7 @@ class ChunkInfo(BaseModel):
 
 
 class EntityRelationData(BaseModel):
-    entities: List[Dict]
+    entities: Dict
     relations: List[Dict]
 
 
@@ -169,7 +167,7 @@ class StepDebugResponse(BaseModel):
 
 # ============== API Endpoints ==============
 
-@app.get("/")
+@app.get("/api")
 async def root():
     return {"message": "Arknights RAG API", "version": "1.0.0"}
 
@@ -188,7 +186,7 @@ async def status():
         "api_key_configured": bool(SILICONFLOW_API_KEY),
         "embedding_model": config.EMBEDDING_MODEL,
         "reranker_model": config.RERANKER_MODEL,
-        "llm_model": config.DEEPSEEK_LLM_MODEL
+        "llm_model": LLM_MODEL or "not configured"
     }
 
 
@@ -203,9 +201,6 @@ async def query(req: QueryRequest):
             use_parent_doc=req.use_parent_doc,
             use_graphrag=req.use_graphrag,
             use_crag=req.use_crag,
-            top_k_operators=req.top_k_operators,
-            top_k_stories=req.top_k_stories,
-            top_k_knowledge=req.top_k_knowledge,
             top_k_per_channel=req.top_k_per_channel,
             rerank_top_k=req.rerank_top_k
         )
@@ -217,16 +212,13 @@ async def query(req: QueryRequest):
             num_docs_used=result.num_docs_used,
             used_web_search=result.used_web_search,
             retrieved_documents=result.retrieved_documents,
+            retrieved_doc_ids=result.retrieved_doc_ids,
             graph_results=result.graph_results,
             pipeline_steps=result.pipeline_steps,
             total_time_ms=result.total_time_ms
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-
-
 
 
 @app.post("/debug/step", response_model=StepDebugResponse)
@@ -242,9 +234,6 @@ async def debug_step(req: StepDebugRequest):
             use_parent_doc=req.use_parent_doc,
             use_graphrag=req.use_graphrag,
             use_crag=req.use_crag,
-            top_k_operators=req.top_k_operators,
-            top_k_stories=req.top_k_stories,
-            top_k_knowledge=req.top_k_knowledge,
             top_k_per_channel=req.top_k_per_channel,
             rerank_top_k=req.rerank_top_k
         )
@@ -307,7 +296,7 @@ async def get_chunk(collection: str, filename: str):
     return {"filename": filename, "content": content}
 
 
-@app.get("/graph", response_model=EntityRelationData)
+@app.get("/knowledge-graph", response_model=EntityRelationData)
 async def get_graph():
     """Get entity relations for knowledge graph"""
     if not ENTITY_RELATIONS_FILE.exists():
@@ -350,6 +339,9 @@ async def get_stats():
 @app.get("/eval")
 async def run_eval():
     """Run evaluation on the question set"""
+    if not _eval_available:
+        raise HTTPException(status_code=503, detail="Eval module not available")
+
     if not EVAL_QUESTIONS_FILE.exists():
         raise HTTPException(status_code=404, detail="Questions file not found")
 
@@ -454,7 +446,31 @@ async def get_stories():
         raise HTTPException(status_code=500, detail=f"Error reading stories data: {str(e)}")
 
 
+# ============== Serve Frontend Static Files ==============
+STATIC_DIR = Path(__file__).parent.parent / "frontend" / "dist"
+
+if STATIC_DIR.is_dir():
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+
+    @app.get("/index.html")
+    async def serve_index():
+        return FileResponse(STATIC_DIR / "index.html")
+
+    # Serve index.html for root path "/"
+    @app.get("/")
+    async def serve_root():
+        return FileResponse(STATIC_DIR / "index.html")
+
+    # Catch-all: serve index.html for any non-API path (Vue SPA)
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        file_path = STATIC_DIR / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(STATIC_DIR / "index.html")
+
+
 # ============== Run Server ==============
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8888))
+    port = int(os.environ.get("PORT", 8889))
     uvicorn.run(app, host="0.0.0.0", port=port)

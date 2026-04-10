@@ -22,9 +22,15 @@ Thumbs.db
 # Logs
 *.log
 
-# Vector Database and processed chunks
+# Vector Database (ChromaDB)
 chroma_db/
+
+# Processed chunks
 chunks/
+chunks/graphrag/
+
+# FAISS indexes
+faiss_index/
 
 # Temporary directories
 .tmp/
@@ -32,3 +38,6 @@ chunks/
 
 # Local data (keep for others to process)
 # data/  # Uncomment if you don't want to share the raw data
+
+# Node modules (frontend)
+node_modules/

@@ -5,12 +5,12 @@
 ## 功能特性
 
 - **查询改写**：fast_rule 快速匹配 + Qwen LLM 精判
-- **多路召回**：向量 + BM25 混合检索 + 标准 RRF 融合
+- **多路召回**：FAISS 向量 + BM25 混合检索 + RRF 融合
 - **Cross-Encoder Rerank**：BAAI/bge-reranker-v2-m3 精排
 - **CRAG 判断**：HIGH/LOW 二分类，网络搜索自动补足低相关场景
 - **Parent Document**：扩展为完整干员/剧情原文
 - **知识图谱**：GraphRAG 实体关系查询
-- **答案生成**：DeepSeek-V3.2 生成最终回答
+- **答案生成**：Qwen 生成最终回答
 - **Pipeline 详情**：显示 RAG 执行步骤及耗时
 - **动态问题**：从真实数据生成随机问题按钮
 
@@ -51,8 +51,7 @@ cp .env.example .env
 ```
 
 必需：
-- **SiliconFlow API Key** - 向量嵌入 + 重排 + 查询改写（[siliconflow.cn](https://siliconflow.cn)）
-- **DeepSeek API Key** - LLM 对话（[deepseek.com](https://deepseek.com)）
+- **SiliconFlow API Key** - 向量嵌入 + 重排 + 查询改写 + 答案生成（[siliconflow.cn](https://siliconflow.cn)）
 
 可选：
 - **Tavily API Key** - 网络搜索补充（[tavily.com](https://tavily.com)）
@@ -70,24 +69,14 @@ cp .env.example .env
 ### 构建索引
 
 ```bash
-# 1. 生成文本切块（自动处理重复标题和微小 chunk 合并）
+# 1. 生成文本切块
 python backend/data/chunker.py
 
 # 2. 生成 BM25 索引（保存为 chunks/*_bm25.pkl）
 python backend/data/bm25_index.py
 
-# 3. 生成向量数据库（需要 SiliconFlow API，强制重建所有索引）
-python -c "
-from backend.storage.index_manager import IndexManager
-from backend.data.bm25_index import build_all_bm25_indexes
-
-print('=== Building BM25 indexes ===')
-build_all_bm25_indexes()
-
-print('=== Building vector indexes ===')
-manager = IndexManager()
-manager.build_all_indexes(force=True)
-"
+# 3. 生成 FAISS 向量索引（需要 SiliconFlow API）
+python backend/build_faiss_index.py
 ```
 
 ## 启动服务
@@ -96,7 +85,7 @@ manager.build_all_indexes(force=True)
 
 ```bash
 cd backend
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn main:app --host 0.0.0.0 --port 8889
 ```
 
 ### 前端
@@ -107,7 +96,7 @@ npm install
 npm run dev
 ```
 
-访问 http://localhost:5173
+访问 http://localhost:5175
 
 ## Docker 部署
 
@@ -132,8 +121,8 @@ cp backend/.env.example backend/.env
 docker-compose up -d --build
 
 # 4. 访问
-# 前端界面: http://服务器IP:8000
-# API 文档: http://服务器IP:8000/docs
+# 前端界面: http://服务器IP:5175
+# API 文档: http://服务器IP:8889/docs
 ```
 
 ### 常用命令
@@ -152,16 +141,16 @@ docker-compose restart
 docker-compose down
 ```
 
-## RAG 流程（8 步）
+## RAG 流程
 
 1. **查询改写** - fast_rule 快速匹配 + Qwen LLM 精判（判断是否检索、分解复杂问题）
-2. **多路召回** - 并行 BM25 + 向量搜索，RRF 融合（operators/stories/knowledge 三个 collection）
+2. **多路召回** - 并行 BM25 + FAISS 向量搜索，RRF 融合（operators/stories/knowledge 三个 collection）
 3. **GraphRAG 查询**（与召回并行）- 知识图谱查询，用于实体关系问题
 4. **Cross-Encoder 重排** - BAAI/bge-reranker-v2-m3
 5. **CRAG 判断** - HIGH/LOW 二分类（低于阈值触发网络搜索）
 6. **Parent Document** - 扩展为完整干员/剧情原文
 7. **网络搜索** - CRAG LOW 时 Tavily 补充
-8. **答案生成** - DeepSeek-V3.2 生成最终回答
+8. **答案生成** - Qwen 生成最终回答
 
 ## 参数配置
 
@@ -181,55 +170,57 @@ RAG_ARKNIGHTS/
 │   ├── config.py            # 配置（API Keys、模型参数）
 │   ├── requirements.txt     # Python 依赖
 │   ├── api/
-│   │   ├── siliconflow.py   # SiliconFlow API（嵌入 + 重排 + 查询改写）
-│   │   └── deepseek.py      # DeepSeek API（LLM 对话）
+│   │   ├── siliconflow.py  # SiliconFlow API（嵌入 + 重排 + 查询改写 + 网络搜索）
+│   │   └── deepseek.py     # DeepSeek API（如使用）
 │   ├── rag/
-│   │   ├── orchestrator.py    # RAG 流程编排（单例模式）
+│   │   ├── chain.py        # LangChain LCEL 流程编排
 │   │   ├── query_rewriter.py  # 查询改写（fast_rule + Qwen）
-│   │   ├── multi_channel_recall.py  # 多路召回（ThreadPoolExecutor 并发）
-│   │   ├── hybrid_search.py   # 混合搜索（向量 + BM25 + 标准 RRF）
-│   │   ├── reranker.py        # Cross-Encoder 重排
-│   │   ├── crag.py            # CRAG 判断（HIGH/LOW 二分类）
-│   │   ├── answer_generator.py # 答案生成（DeepSeek）
+│   │   ├── retrievers.py    # 多路召回（FAISS + BM25 + RRF）
+│   │   ├── crag.py        # CRAG 判断（HIGH/LOW 二分类）
+│   │   ├── answer_generator.py  # 答案生成（Qwen）
 │   │   ├── parent_document.py  # Parent Document 扩展（LRU 缓存）
-│   │   └── graphrag/          # 知识图谱
-│   │       ├── builder.py     # 图谱构建（NetworkX）
-│   │       └── query.py       # 图谱查询（无 LLM）
+│   │   └── graphrag/      # 知识图谱
+│   │       ├── builder.py # 图谱构建（NetworkX）
+│   │       └── query.py  # 图谱查询（无 LLM）
 │   ├── storage/
-│   │   ├── chroma_client.py   # ChromaDB 封装
-│   │   └── index_manager.py   # 索引管理
-│   └── data/
-│       ├── bm25_index.py      # BM25 索引
-│       └── chunker.py        # 文本切块
+│   │   └── faiss_client.py  # FAISS 索引封装
+│   ├── data/
+│   │   ├── bm25_index.py  # BM25 索引
+│   │   └── chunker.py    # 文本切块
+│   └── lc/
+│       ├── embeddings.py   # LangChain 嵌入
+│       ├── reranker.py   # LangChain 重排
+│       └── llm.py       # LangChain LLM
 ├── frontend/
 │   └── src/
 │       ├── views/
 │       │   ├── ChatView.vue   # 问答界面
 │       │   ├── AdminView.vue  # 管理面板（调试、评估）
 │       │   └── GraphView.vue  # 知识图谱可视化
-│       ├── stores/            # Pinia 状态
-│       │   ├── sessions.js    # 会话管理
-│       │   ├── settings.js    # 设置（CRAG/GraphRAG/ParentDoc）
-│       │   └── quickQuestions.js  # 动态问题
-│       └── api.js             # API 客户端
-├── data/                     # 原始数据
-├── chunks/                   # 文本切块
-├── chroma_db/                # 向量数据库
+│       ├── stores/       # Pinia 状态
+│       │   ├── sessions.js
+│       │   ├── settings.js
+│       │   └── quickQuestions.js
+│       └── api.js       # API 客户端
+├── data/                   # 原始数据
+├── chunks/                 # 文本切块
+├── faiss_index/            # FAISS 向量索引
 └── eval/
-    └── rag_eval.py           # RAG 评估
+    └── rag_eval.py        # RAG 评估
 ```
 
 ## API 端点
 
 | 方法 | 路径 | 描述 |
 |------|------|------|
-| GET | `/` | 服务状态 |
+| GET | `/api` | 服务状态 |
 | GET | `/health` | 健康检查 |
+| GET | `/status` | 配置状态 |
 | POST | `/query` | RAG 查询 |
 | POST | `/debug/step` | 单步调试（1-8） |
 | GET | `/chunks/{collection}` | 列出切块 |
 | GET | `/chunks/{collection}/{filename}` | 获取切块内容 |
-| GET | `/graph` | 知识图谱数据 |
+| GET | `/knowledge-graph` | 知识图谱数据 |
 | GET | `/stats` | 统计信息 |
 | GET | `/operators` | 干员列表 |
 | GET | `/characters` | 角色列表 |
@@ -247,11 +238,11 @@ RAG_ARKNIGHTS/
 | 组件 | 技术 |
 |------|------|
 | 后端框架 | FastAPI + Uvicorn |
-| 向量数据库 | ChromaDB |
-| 嵌入模型 | BAAI/bge-m3 (SiliconFlow) |
+| 向量数据库 | FAISS |
+| 嵌入模型 | BAAI/bge-m3 (SiliconFlow Pro) |
 | 重排模型 | BAAI/bge-reranker-v2-m3 (SiliconFlow) |
-| 查询改写 | Qwen/Qwen2.5-7B-Instruct (SiliconFlow) |
-| 答案生成 | deepseek-coder-chat (DeepSeek-V3.2) |
+| 查询改写 | Qwen/Qwen2.5-7B-Instruct (SiliconFlow Pro) |
+| 答案生成 | Qwen/Qwen2.5-7B-Instruct (SiliconFlow Pro) |
 | 网络搜索 | Tavily |
 | 前端 | Vue.js 3 + Vite + Pinia |
 | 图谱可视化 | Cytoscape.js |
@@ -260,8 +251,7 @@ RAG_ARKNIGHTS/
 
 - **QueryRewriter**：5 小时 TTL，缓存 LLM 改写结果
 - **Multi-Channel Recall**：5 小时 TTL
-- **Hybrid Search**：5 小时 TTL，缓存 key 包含 vector_weight 和 inner_top_k
-- **Parent Document**：LRU 缓存（max 100 条，5 小时 TTL）
+- **Parent Document**：LRU 缓���（max 100 条，5 小时 TTL）
 - **BM25 索引**：懒加载，首次召回时构建
 
 ## 许可证
