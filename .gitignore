@@ -1,43 +1,40 @@
-# Environment
-backend/.env
-frontend/.env
-
-# Python
+# Dependencies
 __pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
 
 # IDE
 .vscode/
 .idea/
 *.swp
-*.swo
+
+# Data (too large for git)
+chunks/
+faiss_index/
+chroma_db/
+backend/__pycache__/
+backend_old/
 
 # OS
-.DS_Store
 Thumbs.db
+.DS_Store
+
+# Build
+node_modules/
+dist/
 
 # Logs
 *.log
 
-# Vector Database (ChromaDB)
-chroma_db/
+# Claude Code
+.workbuddy/
+.claude/
 
-# Processed chunks
-chunks/
-chunks/graphrag/
-
-# FAISS indexes
-faiss_index/
-
-# Temporary directories
-.tmp/
+# Testing
 .pytest_cache/
 
-# Local data (keep for others to process)
-# data/  # Uncomment if you don't want to share the raw data
-
-# Node modules (frontend)
-node_modules/
+# Docs
+docs/
