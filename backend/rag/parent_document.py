@@ -1,4 +1,3 @@
-import os
 import time
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -52,8 +51,9 @@ class LRUCache:
 
 class ParentDocumentRetriever:
     def __init__(self, chunks_dir: str = None, data_dir: str = None):
-        self.chunks_dir = chunks_dir or str(Path(__file__).parent.parent / 'chunks')
-        self.data_dir = data_dir or str(Path(__file__).parent.parent / 'data')
+        from backend import config as _cfg
+        self.chunks_dir = chunks_dir or str(_cfg.CHUNKS_DIR)
+        self.data_dir = data_dir or str(_cfg.DATA_DIR)
         # LRU cache for loaded parent documents (max 100 entries, 5 hour TTL)
         # 5 hours = 5 * 60 * 60 = 18000 seconds
         self._doc_cache = LRUCache(max_size=100, ttl_seconds=18000)

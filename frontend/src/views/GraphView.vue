@@ -56,6 +56,7 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import cytoscape from 'cytoscape'
 import { useGraphController } from '../composables/useGraphController'
+import { countEntities } from '../composables/useGraphController'
 
 const controller = useGraphController()
 
@@ -268,8 +269,18 @@ function buildSubgraph() {
   }
 
   // Build nodes
+  const entitiesDict = graphData.value.entities || {}
   finalNodeIds.forEach(nodeId => {
-    const entity = graphData.value.entities.find(e => e.entity === nodeId)
+    // Look up type from entities dict: {"干员": ["银灰", ...], ...}
+    let type = '干员'
+    if (typeof entitiesDict === 'object' && !Array.isArray(entitiesDict)) {
+      for (const [entityType, names] of Object.entries(entitiesDict)) {
+        if (names.includes(nodeId)) {
+          type = entityType
+          break
+        }
+      }
+    }
     const connections = uniqueEdges.filter(
       r => r.data.source === nodeId || r.data.target === nodeId
     ).length
@@ -280,7 +291,7 @@ function buildSubgraph() {
       data: {
         id: nodeId,
         label: nodeId,
-        type: entity?.type || '干员',
+        type: type,
         size: size
       }
     })
@@ -392,7 +403,6 @@ onUnmounted(() => {
 
 // Watch for changes
 watch(() => controller.selectedNodes.value, (newVal) => {
-  console.log('GraphView watch triggered, selectedNodes:', [...newVal])
   updateGraph()
 })  // No deep: true needed - selectedNodes uses array replacement, not in-place mutation
 watch(() => controller.neighborLevel.value, updateGraph)

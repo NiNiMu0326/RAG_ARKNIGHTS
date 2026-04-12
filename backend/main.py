@@ -2,37 +2,52 @@
 Arknights RAG Backend - FastAPI Server
 Provides REST API for the frontend
 """
+import asyncio
 import sys
 import os
 import json
+import time
+import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 import uvicorn
+
+from backend.db import get_db, init_db
+from backend.auth import (
+    validate_account, validate_username, validate_password,
+    hash_password, verify_password, create_jwt, decode_jwt
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("arknights_rag")
 
 # Import RAG components
 from backend.rag.orchestrator import RAGOrchestrator, get_orchestrator
 from backend.config import (
     BASE_DIR, CHUNKS_DIR, FAISS_INDEX_DIR, DATA_DIR,
-    ENTITY_RELATIONS_FILE, EVAL_QUESTIONS_FILE, SILICONFLOW_API_KEY,
+    ENTITY_RELATIONS_FILE, SILICONFLOW_API_KEY,
     EMBEDDING_MODEL, RERANKER_MODEL, DEEPSEEK_LLM_MODEL, DEEPSEEK_API_KEY, LLM_MODEL,
 )
 import backend.config as config
 
-try:
-    from eval.rag_eval import LLMEvaluator, load_questions, run_evaluation
-    _eval_available = True
-except ImportError:
-    _eval_available = False
-    print("WARNING: eval.rag_eval not available, /eval endpoint will be disabled")
+# Import AgenticRAG components
+from backend.agent.sessions import SessionManager
+from backend.agent.core import agent_loop
+from backend.api.llm_factory import get_available_models, DEFAULT_MODEL
 
 # ============== FastAPI App ==============
 app = FastAPI(
@@ -50,12 +65,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.on_event("startup")
+async def startup():
+    await init_db()
+
+
+# Request logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.time()
+    req_id = id(request)
+    
+    # Log request
+    body_info = ""
+    if request.method in ("POST", "PUT", "PATCH"):
+        # Read body for logging, but we need to store it for the endpoint
+        body = await request.body()
+        try:
+            body_json = json.loads(body)
+            # Truncate long fields for readability
+            log_body = {k: (v if len(str(v)) < 200 else str(v)[:200] + "...") for k, v in body_json.items()}
+            body_info = f" body={json.dumps(log_body, ensure_ascii=False)}"
+        except Exception:
+            body_info = f" body_length={len(body)}"
+    
+    logger.info(f"[REQ #{req_id}] {request.method} {request.url.path}{body_info}")
+    
+    response = await call_next(request)
+    
+    elapsed = (time.time() - start) * 1000
+    logger.info(f"[RES #{req_id}] {request.method} {request.url.path} -> {response.status_code} ({elapsed:.0f}ms)")
+    
+    return response
+
 def get_orch() -> RAGOrchestrator:
     return get_orchestrator(
         api_key=str(SILICONFLOW_API_KEY),
         faiss_index_dir=str(FAISS_INDEX_DIR),
         deepseek_api_key=str(DEEPSEEK_API_KEY)
     )
+
+
+# AgenticRAG Session Manager (singleton)
+_session_manager = SessionManager(max_sessions=1000, ttl_seconds=3600)
 
 
 # ============== Request/Response Models ==============
@@ -85,40 +138,20 @@ class QueryRequest(BaseModel):
         return v
 
 
-class StepDebugRequest(BaseModel):
-    question: str
-    step: int  # 1-8, which step to execute
-    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
-    # Previous step results (for step-by-step execution)
-    step_results: Dict[int, Any] = Field(default_factory=dict)
-    use_parent_doc: bool = True
-    use_graphrag: bool = True
-    use_crag: bool = True
-    top_k_per_channel: int = 8
-    rerank_top_k: int = 5
+# ===== AgenticRAG Request Models =====
 
-    @field_validator('question')
+class AgentChatRequest(BaseModel):
+    """Request for agent chat endpoint."""
+    session_id: str
+    message: str
+    model: Optional[str] = None
+
+    @field_validator('message')
     @classmethod
-    def question_not_empty(cls, v: str) -> str:
+    def message_not_empty(cls, v: str) -> str:
         if not v or not v.strip():
-            raise ValueError('question cannot be empty')
+            raise ValueError('message cannot be empty')
         return v.strip()
-
-    @field_validator('step')
-    @classmethod
-    def step_must_be_valid(cls, v: int) -> int:
-        if v < 1 or v > 8:
-            raise ValueError(f'step must be between 1 and 8, got {v}')
-        return v
-
-    @field_validator('top_k_per_channel', 'rerank_top_k')
-    @classmethod
-    def top_k_must_be_positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError(f'top_k values must be positive, got {v}')
-        if v > 100:
-            raise ValueError(f'top_k values must not exceed 100, got {v}')
-        return v
 
 
 class QueryResponse(BaseModel):
@@ -152,17 +185,6 @@ class StatsResponse(BaseModel):
     stories: int
     knowledge: int
     relations: int
-
-
-class StepDebugResponse(BaseModel):
-    step: int
-    step_name: str
-    step_name_cn: str
-    input_data: Any
-    output_data: Any
-    time_ms: int
-    can_continue: bool
-    error: Optional[str] = None
 
 
 # ============== API Endpoints ==============
@@ -216,37 +238,6 @@ async def query(req: QueryRequest):
             graph_results=result.graph_results,
             pipeline_steps=result.pipeline_steps,
             total_time_ms=result.total_time_ms
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/debug/step", response_model=StepDebugResponse)
-async def debug_step(req: StepDebugRequest):
-    """Execute a single RAG step for debugging"""
-    try:
-        orch = get_orch()
-        result = orch.run_debug_step(
-            step=req.step,
-            question=req.question,
-            conversation_history=req.conversation_history,
-            previous_results=req.step_results,
-            use_parent_doc=req.use_parent_doc,
-            use_graphrag=req.use_graphrag,
-            use_crag=req.use_crag,
-            top_k_per_channel=req.top_k_per_channel,
-            rerank_top_k=req.rerank_top_k
-        )
-
-        return StepDebugResponse(
-            step=result['step'],
-            step_name=result['name'],
-            step_name_cn=result['name_cn'],
-            input_data=result.get('input_data'),
-            output_data=result.get('output_data'),
-            time_ms=result.get('time_ms', 0),
-            can_continue=result.get('can_continue', False),
-            error=result.get('error')
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -336,33 +327,346 @@ async def get_stats():
     return StatsResponse(**stats)
 
 
-@app.get("/eval")
-async def run_eval():
-    """Run evaluation on the question set"""
-    if not _eval_available:
-        raise HTTPException(status_code=503, detail="Eval module not available")
+# ============== Auth & Conversation Endpoints ==============
 
-    if not EVAL_QUESTIONS_FILE.exists():
-        raise HTTPException(status_code=404, detail="Questions file not found")
+class RegisterRequest(BaseModel):
+    account: str
+    username: str
+    password: str
 
-    questions = load_questions(EVAL_QUESTIONS_FILE)
-    if not questions:
-        raise HTTPException(status_code=400, detail="No questions found")
+class LoginRequest(BaseModel):
+    account: str
+    password: str
 
-    orch = get_orch()
-    evaluator = LLMEvaluator(SILICONFLOW_API_KEY)
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
 
-    def rag_pipeline(question: str):
-        result = orch.query(question=question)
-        return {"answer": result.answer}
+class SyncConversationsRequest(BaseModel):
+    conversations: list
 
-    result = run_evaluation(
-        questions=questions,
-        rag_pipeline_fn=rag_pipeline,
-        evaluator=evaluator
+
+def get_current_user(authorization: str = Header(None)):
+    """Extract current user from JWT token in Authorization header."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:]
+    payload = decode_jwt(token)
+    if not payload:
+        return None
+    return payload
+
+
+@app.post("/auth/register")
+async def register(req: RegisterRequest):
+    """Register a new user."""
+    err = validate_account(req.account)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    err = validate_username(req.username)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    err = validate_password(req.password)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT id FROM users WHERE account = ?", (req.account,))
+        if await cursor.fetchone():
+            raise HTTPException(status_code=400, detail="该账号已被注册")
+
+        pw_hash = hash_password(req.password)
+        cursor = await db.execute(
+            "INSERT INTO users (account, username, password_hash) VALUES (?, ?, ?)",
+            (req.account, req.username.strip(), pw_hash)
+        )
+        await db.commit()
+        user_id = cursor.lastrowid
+
+        token = create_jwt(user_id, req.account, req.username.strip(), datetime.now(timezone.utc).isoformat())
+        return {"token": token, "user": {"id": user_id, "account": req.account, "username": req.username.strip()}}
+    finally:
+        await db.close()
+
+
+@app.post("/auth/login")
+async def login(req: LoginRequest):
+    """Login with account + password."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT id, account, username, password_hash, password_changed_at FROM users WHERE account = ?", (req.account,))
+        row = await cursor.fetchone()
+        if not row or not verify_password(req.password, row["password_hash"]):
+            raise HTTPException(status_code=401, detail="账号或密码错误")
+
+        token = create_jwt(row["id"], row["account"], row["username"], row["password_changed_at"])
+        return {"token": token, "user": {"id": row["id"], "account": row["account"], "username": row["username"]}}
+    finally:
+        await db.close()
+
+
+@app.get("/auth/me")
+async def get_me(user: dict = Depends(get_current_user)):
+    """Get current user info."""
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+    return {"user": {"id": user["user_id"], "account": user["account"], "username": user["username"]}}
+
+
+@app.post("/auth/change-password")
+async def change_password(req: ChangePasswordRequest, user: dict = Depends(get_current_user)):
+    """Change password. Invalidates JWT after change."""
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT password_hash FROM users WHERE id = ?", (user["user_id"],))
+        row = await cursor.fetchone()
+        if not row or not verify_password(req.old_password, row["password_hash"]):
+            raise HTTPException(status_code=400, detail="旧密码错误")
+
+        err = validate_password(req.new_password)
+        if err:
+            raise HTTPException(status_code=400, detail=err)
+
+        new_hash = hash_password(req.new_password)
+        now = datetime.now(timezone.utc).isoformat()
+        await db.execute("UPDATE users SET password_hash = ?, password_changed_at = ? WHERE id = ?", (new_hash, now, user["user_id"]))
+        await db.commit()
+
+        token = create_jwt(user["user_id"], user["account"], user["username"], now)
+        return {"token": token}
+    finally:
+        await db.close()
+
+
+@app.get("/conversations")
+async def list_conversations(user: dict = Depends(get_current_user)):
+    """List all conversations for the current user."""
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT session_id, name, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY updated_at DESC",
+            (user["user_id"],)
+        )
+        rows = await cursor.fetchall()
+        return {"conversations": [dict(r) for r in rows]}
+    finally:
+        await db.close()
+
+
+@app.get("/conversations/{session_id}/messages")
+async def get_conversation_messages(session_id: str, user: dict = Depends(get_current_user)):
+    """Get all messages for a conversation."""
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT user_id FROM conversations WHERE session_id = ?", (session_id,))
+        row = await cursor.fetchone()
+        if not row or row["user_id"] != user["user_id"]:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        cursor = await db.execute(
+            "SELECT role, content, metadata, created_at FROM messages WHERE session_id = ? ORDER BY created_at",
+            (session_id,)
+        )
+        messages = [dict(r) for r in await cursor.fetchall()]
+        for m in messages:
+            try:
+                m["metadata"] = json.loads(m["metadata"]) if m["metadata"] else {}
+            except Exception:
+                m["metadata"] = {}
+        return {"messages": messages}
+    finally:
+        await db.close()
+
+
+@app.post("/conversations/sync")
+async def sync_conversations(req: SyncConversationsRequest, user: dict = Depends(get_current_user)):
+    """Sync (upsert) conversations from frontend. Incremental: skip existing messages."""
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+    db = await get_db()
+    try:
+        for conv in req.conversations:
+            sid = conv.get("session_id")
+            if not sid:
+                continue
+            cursor = await db.execute("SELECT session_id FROM conversations WHERE session_id = ?", (sid,))
+            exists = await cursor.fetchone()
+            if not exists:
+                await db.execute(
+                    "INSERT INTO conversations (session_id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (sid, user["user_id"], conv.get("name", ""), conv.get("created_at", ""), conv.get("updated_at", ""))
+                )
+            else:
+                await db.execute(
+                    "UPDATE conversations SET name = ?, updated_at = ? WHERE session_id = ?",
+                    (conv.get("name", ""), conv.get("updated_at", ""), sid)
+                )
+
+            for msg in conv.get("messages", []):
+                metadata_str = json.dumps(msg.get("metadata", {}), ensure_ascii=False)
+                cursor = await db.execute(
+                    "SELECT id FROM messages WHERE session_id = ? AND role = ? AND content = ? AND created_at = ?",
+                    (sid, msg.get("role", ""), msg.get("content", ""), msg.get("created_at", ""))
+                )
+                if not await cursor.fetchone():
+                    await db.execute(
+                        "INSERT INTO messages (session_id, role, content, metadata, created_at) VALUES (?, ?, ?, ?, ?)",
+                        (sid, msg.get("role", ""), msg.get("content", ""), metadata_str, msg.get("created_at", ""))
+                    )
+        await db.commit()
+        return {"status": "ok"}
+    finally:
+        await db.close()
+
+
+@app.delete("/conversations/{session_id}")
+async def delete_conversation(session_id: str, user: dict = Depends(get_current_user)):
+    """Delete a conversation and its messages."""
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT user_id FROM conversations WHERE session_id = ?", (session_id,))
+        row = await cursor.fetchone()
+        if not row or row["user_id"] != user["user_id"]:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        await db.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+        await db.execute("DELETE FROM conversations WHERE session_id = ?", (session_id,))
+        await db.commit()
+        return {"status": "ok"}
+    finally:
+        await db.close()
+
+
+@app.put("/conversations/{session_id}/rename")
+async def rename_conversation(session_id: str, name: str = "", user: dict = Depends(get_current_user)):
+    """Rename a conversation."""
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT user_id FROM conversations WHERE session_id = ?", (session_id,))
+        row = await cursor.fetchone()
+        if not row or row["user_id"] != user["user_id"]:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        await db.execute("UPDATE conversations SET name = ? WHERE session_id = ?", (name, session_id))
+        await db.commit()
+        return {"status": "ok"}
+    finally:
+        await db.close()
+
+
+# ============== AgenticRAG Endpoints ==============
+
+@app.post("/agent/session")
+async def create_agent_session():
+    """Create a new agent session."""
+    session_id = _session_manager.create_session()
+    return {"session_id": session_id}
+
+
+@app.post("/agent/chat")
+async def agent_chat(req: AgentChatRequest):
+    """Agent chat endpoint with SSE streaming.
+    
+    If the session_id is invalid or expired, a new session is auto-created.
+    """
+    session = _session_manager.get_session(req.session_id)
+    actual_session_id = req.session_id
+    
+    if session is None:
+        # Session expired or invalid — auto-create a new one
+        actual_session_id = _session_manager.create_session()
+        logger.warning(f"Session '{req.session_id}' not found/expired, auto-created new session: {actual_session_id}")
+    
+    model_id = req.model or DEFAULT_MODEL
+    logger.info(f"[AGENT CHAT] session={actual_session_id} model={model_id} message={req.message[:100]}")
+
+    return StreamingResponse(
+        agent_loop(
+            session_id=actual_session_id,
+            user_message=req.message,
+            session_manager=_session_manager,
+            model_id=model_id,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-New-Session-Id": actual_session_id if actual_session_id != req.session_id else "",
+        }
     )
 
-    return result
+
+@app.get("/agent/session/{session_id}/messages")
+async def get_session_messages(session_id: str):
+    """Get session message history."""
+    session = _session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+    return {"messages": session.messages}
+
+
+@app.delete("/agent/session/{session_id}")
+async def delete_agent_session(session_id: str):
+    """Delete a session."""
+    _session_manager.delete_session(session_id)
+    return {"status": "ok"}
+
+
+@app.get("/agent/debug/trace")
+async def get_agent_debug_trace(session_id: str):
+    """Get Agent's complete tool call trace for debugging."""
+    session = _session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    traces = []
+    for msg in session.messages:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                fn = tc.get("function", {})
+                traces.append({
+                    "type": "tool_call",
+                    "id": tc.get("id", ""),
+                    "name": fn.get("name", ""),
+                    "arguments": fn.get("arguments", ""),
+                })
+        elif msg.get("role") == "tool":
+            traces.append({
+                "type": "tool_result",
+                "tool_call_id": msg.get("tool_call_id", ""),
+                "content": msg.get("content", "")[:500],
+            })
+
+    return {"traces": traces}
+
+
+@app.get("/agent/stats")
+async def get_agent_stats():
+    """Get agent session statistics."""
+    return {
+        "active_sessions": _session_manager.get_active_count(),
+        "max_sessions": _session_manager._max_sessions,
+        "ttl_seconds": _session_manager._ttl,
+    }
+
+
+@app.get("/agent/models")
+async def get_agent_models():
+    """Get available LLM models."""
+    return {
+        "models": get_available_models(),
+        "default": DEFAULT_MODEL,
+    }
 
 
 # ============== Data Endpoints ==============
@@ -447,7 +751,7 @@ async def get_stories():
 
 
 # ============== Serve Frontend Static Files ==============
-STATIC_DIR = Path(__file__).parent.parent / "frontend" / "dist"
+STATIC_DIR = Path(__file__).parent.parent / "static"
 
 if STATIC_DIR.is_dir():
     app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")

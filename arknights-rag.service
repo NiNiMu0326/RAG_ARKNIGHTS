@@ -1,0 +1,15 @@
+[Unit]
+Description=Arknights RAG Backend
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/RAG_ARKNIGHTS
+ExecStart=/usr/bin/python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8889 --workers 1
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,18 +1,17 @@
-# 明日方舟 RAG 助手
+﻿# 明日方舟 RAG 助手
 
 基于明日方舟数据集的智能问答助手，支持干员查询、剧情搜索、游戏攻略等检索场景。
 
 ## 功能特性
 
-- **查询改写**：fast_rule 快速匹配 + Qwen LLM 精判
-- **多路召回**：FAISS 向量 + BM25 混合检索 + RRF 融合
-- **Cross-Encoder Rerank**：BAAI/bge-reranker-v2-m3 精排
-- **CRAG 判断**：HIGH/LOW 二分类，网络搜索自动补足低相关场景
-- **Parent Document**：扩展为完整干员/剧情原文
-- **知识图谱**：GraphRAG 实体关系查询
-- **答案生成**：Qwen 生成最终回答
-- **Pipeline 详情**：显示 RAG 执行步骤及耗时
-- **动态问题**：从真实数据生成随机问题按钮
+- **AgenticRAG**：DeepSeek-chat Function Calling 自主决定检索路径
+- **并行工具调用**：Agent 可同时发起多个工具调用，提升效率
+- **SSE 流式输出**：实时显示 Agent 思考过程和工具执行状态
+- **知识库检索**：FAISS 向量 + BM25 混合检索 + Cross-Encoder 重排
+- **GraphRAG**：知识图谱实体关系查询（单实体邻居 / 双实体路径）
+- **网络搜索**：Tavily + DuckDuckGo 补充外部信息
+- **会话管理**：后端会话存储，支持多轮对话上下文
+- **PipelineRAG 兼容**：旧版8步固定流程仍可使用
 
 ## 系统要求
 
@@ -143,14 +142,33 @@ docker-compose down
 
 ## RAG 流程
 
-1. **查询改写** - fast_rule 快速匹配 + Qwen LLM 精判（判断是否检索、分解复杂问题）
-2. **多路召回** - 并行 BM25 + FAISS 向量搜索，RRF 融合（operators/stories/knowledge 三个 collection）
-3. **GraphRAG 查询**（与召回并行）- 知识图谱查询，用于实体关系问题
+### AgenticRAG（主要模式）
+
+DeepSeek-chat Agent 自主决定检索路径，通过 Function Calling 调用工具：
+
+1. **用户提问** → Agent 判断需要哪些工具
+2. **并行工具调用** - 同时发起多个无依赖的工具调用
+3. **串行依赖调用** - 后续查询依赖前次结果时分步调用
+4. **信息充足性判断** - 足够则生成回答，不足则补充检索
+5. **生成回答** - 基于检索结果生成最终回答
+
+**三个工具：**
+- `arknights_rag_search` - 知识库检索（向量 + BM25 + 重排 + Parent Doc）
+- `arknights_graphrag_search` - 知识图谱查询（实体邻居 / 关系路径）
+- `web_search` - 网络搜索（Tavily + DuckDuckGo）
+
+**安全机制：** 最大8轮调用、循环检测、SSE 流式输出
+
+### PipelineRAG（兼容模式，`/query` 端点）
+
+1. **查询改写** - fast_rule + Qwen LLM
+2. **多路召回** - BM25 + FAISS 向量，RRF 融合
+3. **GraphRAG 查询** - 知识图谱
 4. **Cross-Encoder 重排** - BAAI/bge-reranker-v2-m3
-5. **CRAG 判断** - HIGH/LOW 二分类（低于阈值触发网络搜索）
-6. **Parent Document** - 扩展为完整干员/剧情原文
-7. **网络搜索** - CRAG LOW 时 Tavily 补充
-8. **答案生成** - Qwen 生成最终回答
+5. **CRAG 判断** - HIGH/LOW 二分类
+6. **Parent Document** - 扩展完整原文
+7. **网络搜索** - CRAG LOW 时补充
+8. **答案生成** - DeepSeek 生成回答
 
 ## 参数配置
 
@@ -169,19 +187,27 @@ RAG_ARKNIGHTS/
 │   ├── main.py              # FastAPI 主应用
 │   ├── config.py            # 配置（API Keys、模型参数）
 │   ├── requirements.txt     # Python 依赖
+│   ├── agent/               # AgenticRAG 核心
+│   │   ├── core.py          # Agent 主循环（SSE、并行 FC、循环检测）
+│   │   ├── tools.py         # 工具 Schema + ToolRegistry
+│   │   ├── tool_implementations.py  # 工具实现（RAG/GraphRAG/Web）
+│   │   ├── sessions.py      # 会话管理（TTL、LRU）
+│   │   └── prompts.py       # 系统提示词
 │   ├── api/
-│   │   ├── siliconflow.py  # SiliconFlow API（嵌入 + 重排 + 查询改写 + 网络搜索）
-│   │   └── deepseek.py     # DeepSeek API（如使用）
+│   │   ├── siliconflow.py  # SiliconFlow API（嵌入 + 重排 + 网络搜索）
+│   │   └── deepseek.py     # DeepSeek API（LLM + Function Calling）
 │   ├── rag/
-│   │   ├── chain.py        # LangChain LCEL 流程编排
+│   │   ├── orchestrator.py  # PipelineRAG 编排器
+│   │   ├── chain.py        # LangChain LCEL 流程
 │   │   ├── query_rewriter.py  # 查询改写（fast_rule + Qwen）
 │   │   ├── retrievers.py    # 多路召回（FAISS + BM25 + RRF）
 │   │   ├── crag.py        # CRAG 判断（HIGH/LOW 二分类）
-│   │   ├── answer_generator.py  # 答案生成（Qwen）
-│   │   ├── parent_document.py  # Parent Document 扩展（LRU 缓存）
+│   │   ├── answer_generator.py  # 答案生成
+│   │   ├── parent_document.py  # Parent Document 扩展
 │   │   └── graphrag/      # 知识图谱
-│   │       ├── builder.py # 图谱构建（NetworkX）
-│   │       └── query.py  # 图谱查询（无 LLM）
+│   │       ├── builder.py # 图谱构建（NetworkX DiGraph）
+│   │       ├── extractor.py # 实体关系提取
+│   │       └── query.py  # 图谱查询
 │   ├── storage/
 │   │   └── faiss_client.py  # FAISS 索引封装
 │   ├── data/
@@ -194,30 +220,52 @@ RAG_ARKNIGHTS/
 ├── frontend/
 │   └── src/
 │       ├── views/
-│       │   ├── ChatView.vue   # 问答界面
+│       │   ├── ChatView.vue   # 问答界面（SSE 流式 + 工具卡片）
 │       │   ├── AdminView.vue  # 管理面板（调试、评估）
 │       │   └── GraphView.vue  # 知识图谱可视化
 │       ├── stores/       # Pinia 状态
 │       │   ├── sessions.js
 │       │   ├── settings.js
 │       │   └── quickQuestions.js
-│       └── api.js       # API 客户端
+│       └── api.js       # API 客户端（含 Agent SSE）
 ├── data/                   # 原始数据
 ├── chunks/                 # 文本切块
 ├── faiss_index/            # FAISS 向量索引
+├── Scripts/
+│   └── scraper.py          # PRTS Wiki 数据爬虫
 └── eval/
-    └── rag_eval.py        # RAG 评估
+    ├── rag_eval.py         # RAG 评估模块
+    ├── run_eval.py         # 评估运行脚本
+    └── questions.json      # 评估问题集
 ```
 
 ## API 端点
+
+### AgenticRAG（主要）
+
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| POST | `/agent/session` | 创建 Agent 会话 |
+| POST | `/agent/chat` | Agent SSE 流式对话 |
+| GET | `/agent/session/{id}/messages` | 获取消息历史 |
+| DELETE | `/agent/session/{id}` | 删除会话 |
+| GET | `/agent/debug/trace` | 调试追踪 |
+| GET | `/agent/stats` | 会话统计 |
+
+### PipelineRAG（兼容）
+
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| POST | `/query` | PipelineRAG 查询 |
+| POST | `/debug/step` | 单步调试（1-8） |
+
+### 其他
 
 | 方法 | 路径 | 描述 |
 |------|------|------|
 | GET | `/api` | 服务状态 |
 | GET | `/health` | 健康检查 |
 | GET | `/status` | 配置状态 |
-| POST | `/query` | RAG 查询 |
-| POST | `/debug/step` | 单步调试（1-8） |
 | GET | `/chunks/{collection}` | 列出切块 |
 | GET | `/chunks/{collection}/{filename}` | 获取切块内容 |
 | GET | `/knowledge-graph` | 知识图谱数据 |
@@ -225,11 +273,12 @@ RAG_ARKNIGHTS/
 | GET | `/operators` | 干员列表 |
 | GET | `/characters` | 角色列表 |
 | GET | `/stories` | 故事列表 |
-| GET | `/eval` | 运行评估 |
+| GET | `/eval/stream` | SSE 评估 |
+| POST | `/eval/start` | 后台评估 |
 
 ## 前端功能
 
-- **问答界面**：支持多会话、检索结果展示、pipeline 详情
+- **问答界面**：SSE 流式输出、工具调用卡片、多会话支持
 - **管理面板**：单步调试、参数配置、评估对比
 - **知识图谱**：实体关系可视化
 
@@ -238,22 +287,27 @@ RAG_ARKNIGHTS/
 | 组件 | 技术 |
 |------|------|
 | 后端框架 | FastAPI + Uvicorn |
+| Agent LLM | DeepSeek-chat (Function Calling) |
 | 向量数据库 | FAISS |
 | 嵌入模型 | BAAI/bge-m3 (SiliconFlow Pro) |
 | 重排模型 | BAAI/bge-reranker-v2-m3 (SiliconFlow) |
 | 查询改写 | Qwen/Qwen2.5-7B-Instruct (SiliconFlow Pro) |
-| 答案生成 | Qwen/Qwen2.5-7B-Instruct (SiliconFlow Pro) |
-| 网络搜索 | Tavily |
+| 答案生成 | DeepSeek-chat |
+| 网络搜索 | Tavily + DuckDuckGo (SiliconFlow) |
+| 知识图谱 | NetworkX DiGraph |
 | 前端 | Vue.js 3 + Vite + Pinia |
 | 图谱可视化 | Cytoscape.js |
 
 ## 缓存策略
 
+
+- **Agent 会话**：TTL 3600s，最大 1000 会话，LRU 驱逐
 - **QueryRewriter**：5 小时 TTL，缓存 LLM 改写结果
 - **Multi-Channel Recall**：5 小时 TTL
-- **Parent Document**：LRU 缓���（max 100 条，5 小时 TTL）
+- **Parent Document**：LRU 缓存（max 100 条，5 小时 TTL）
 - **BM25 索引**：懒加载，首次召回时构建
+- **GraphBuilder**：懒加载单例
 
-## 许可证
+
 
 MIT License

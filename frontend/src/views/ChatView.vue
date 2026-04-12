@@ -18,19 +18,149 @@
               class="chat-message"
               :class="msg.role"
             >
-              <div class="chat-bubble">
-                <div class="chat-role">{{ msg.role === 'user' ? 'You' : 'Arknights RAG' }}</div>
-                <div class="chat-text">{{ escapeHtml(msg.content) }}</div>
-              </div>
-              <div class="chat-time">{{ formatTime(new Date(msg.timestamp)) }}</div>
+              <!-- User message -->
+              <template v-if="msg.role === 'user'">
+                <div class="chat-bubble">
+                  <div class="chat-role">You</div>
+                  <div class="chat-text">{{ escapeHtml(msg.content) }}</div>
+                </div>
+                <div class="chat-time">{{ formatTime(new Date(msg.timestamp)) }}</div>
+              </template>
+
+              <!-- Assistant message -->
+              <template v-else-if="msg.role === 'assistant'">
+                <div class="chat-bubble">
+                  <div class="chat-role">Arknights RAG</div>
+                  <div class="thinking-section" v-if="msg.thinking">
+                    <div class="thinking-toggle" @click="toggleThinking(idx)">
+                      <span class="thinking-icon">{{ expandedThinking.includes(idx) ? '▼' : '▶' }}</span>
+                      <span class="thinking-label">思考过程</span>
+                    </div>
+                    <div class="thinking-content" v-if="expandedThinking.includes(idx)">{{ msg.thinking }}</div>
+                  </div>
+                  <div class="chat-text">{{ escapeHtml(msg.content) }}</div>
+                </div>
+                <div class="chat-time">{{ formatTime(new Date(msg.timestamp)) }}</div>
+              </template>
+
+              <!-- Tool call display -->
+              <template v-else-if="msg.role === 'tool_call'">
+                <div class="tool-call-card">
+                  <div class="tool-call-header">
+                    <span class="tool-call-round">Round {{ msg.round }}</span>
+                    <span class="tool-call-count">{{ msg.calls?.length || 0 }} tools</span>
+                  </div>
+                  <div class="tool-call-list">
+                    <div
+                      v-for="call in msg.calls"
+                      :key="call.id"
+                      class="tool-call-item"
+                      :class="{ 'has-result': msg.results?.[call.id], 'is-expanded': expandedTools.includes(call.id) }"
+                      @click="toggleToolResult(call.id)"
+                    >
+                      <div class="tool-call-name-row">
+                        <div class="tool-call-name">
+                          <span class="tool-icon">{{ getToolIcon(call.name) }}</span>
+                          {{ getToolDisplayName(call.name) }}
+                        </div>
+                        <div class="tool-call-meta">
+                          <span class="tool-call-args" v-if="call.arguments_summary">{{ call.arguments_summary }}</span>
+                          <span class="tool-result-time" v-if="msg.results?.[call.id]">{{ Math.round(msg.results[call.id].time_ms) }}ms</span>
+                        </div>
+                      </div>
+                      <div class="tool-result-summary" v-if="msg.results?.[call.id] && !expandedTools.includes(call.id)">
+                        {{ msg.results[call.id].summary }}
+                      </div>
+                      <div class="tool-call-pending" v-if="!msg.results?.[call.id]">
+                        <span class="pending-dot"></span> 执行中...
+                      </div>
+                      <div class="tool-result-detail" v-if="msg.results?.[call.id] && expandedTools.includes(call.id)">
+                        <div class="tool-detail-summary">{{ msg.results[call.id].summary }}</div>
+                        <div class="tool-detail-content" v-if="msg.results[call.id].data">
+                          <template v-if="call.name === 'arknights_rag_search'">
+                            <div v-for="(doc, i) in (Array.isArray(msg.results[call.id].data) ? msg.results[call.id].data : [])" :key="i" class="tool-detail-doc">
+                              <div class="tool-detail-doc-header">
+                                <span class="tool-detail-doc-source">{{ doc.source || 'unknown' }}</span>
+                                <span class="tool-detail-doc-score">{{ doc.score ? doc.score.toFixed(4) : '' }}</span>
+                              </div>
+                              <div class="tool-detail-doc-content">{{ doc.content || doc.error || '' }}</div>
+                            </div>
+                          </template>
+                          <template v-else-if="call.name === 'arknights_graphrag_search'">
+                            <div class="tool-detail-graph">
+                              <template v-if="msg.results[call.id].data.mode === 'path'">
+                                <div class="tool-detail-graph-path">
+                                  路径: <span v-for="(node, i) in msg.results[call.id].data.path" :key="i"><span class="graph-node">{{ node }}</span><span v-if="i < msg.results[call.id].data.path.length - 1" class="graph-arrow"> → </span></span>
+                                </div>
+                                <div v-for="(edge, i) in msg.results[call.id].data.edges" :key="i" class="tool-detail-graph-edge">
+                                  <span class="graph-node">{{ edge.source }}</span>
+                                  <span class="graph-relation">--{{ edge.relation }}--></span>
+                                  <span class="graph-node">{{ edge.target }}</span>
+                                  <div v-if="edge.description" class="graph-edge-desc">{{ edge.description }}</div>
+                                </div>
+                              </template>
+                              <template v-else-if="msg.results[call.id].data.mode === 'neighbors'">
+                                <div class="tool-detail-graph-entity">实体: {{ msg.results[call.id].data.entity }}</div>
+                                <!-- Outgoing relations -->
+                                <template v-if="msg.results[call.id].data.relations?.outgoing?.length">
+                                  <div class="graph-direction-label">→ 出边</div>
+                                  <div v-for="(rel, i) in msg.results[call.id].data.relations.outgoing" :key="'out'+i" class="tool-detail-graph-edge">
+                                    <span class="graph-node">{{ msg.results[call.id].data.entity }}</span>
+                                    <span class="graph-relation">--{{ rel.relation }}--></span>
+                                    <span class="graph-node">{{ rel.entity }}</span>
+                                    <div v-if="rel.description" class="graph-edge-desc">{{ rel.description }}</div>
+                                  </div>
+                                </template>
+                                <!-- Incoming relations -->
+                                <template v-if="msg.results[call.id].data.relations?.incoming?.length">
+                                  <div class="graph-direction-label">← 入边</div>
+                                  <div v-for="(rel, i) in msg.results[call.id].data.relations.incoming" :key="'in'+i" class="tool-detail-graph-edge">
+                                    <span class="graph-node">{{ rel.entity }}</span>
+                                    <span class="graph-relation">--{{ rel.relation }}--></span>
+                                    <span class="graph-node">{{ msg.results[call.id].data.entity }}</span>
+                                    <div v-if="rel.description" class="graph-edge-desc">{{ rel.description }}</div>
+                                  </div>
+                                </template>
+                              </template>
+                              <template v-else>
+                                <pre>{{ formatToolResult(msg.results[call.id].data) }}</pre>
+                              </template>
+                            </div>
+                          </template>
+                          <template v-else-if="call.name === 'web_search'">
+                            <div v-for="(item, i) in (Array.isArray(msg.results[call.id].data) ? msg.results[call.id].data : [])" :key="i" class="tool-detail-web">
+                              <div class="tool-detail-web-title">
+                                <a v-if="item.url" :href="item.url" target="_blank" rel="noopener">{{ item.title || `结果 ${i+1}` }}</a>
+                                <span v-else>{{ item.title || `结果 ${i+1}` }}</span>
+                              </div>
+                              <div class="tool-detail-web-content">{{ item.content || item.message || item.error || '' }}</div>
+                            </div>
+                          </template>
+                          <template v-else>
+                            <pre>{{ formatToolResult(msg.results[call.id].data) }}</pre>
+                          </template>
+                        </div>
+                        <div class="tool-detail-empty" v-else>无详细数据</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </template>
             </div>
           </div>
 
           <div v-if="isLoading" class="chat-message assistant">
             <div class="chat-bubble">
               <div class="chat-role">Arknights RAG</div>
+              <div class="thinking-section" v-if="currentThinking">
+                <div class="thinking-toggle" @click="toggleThinking('current')">
+                  <span class="thinking-icon">{{ expandedThinking.includes('current') ? '▼' : '▶' }}</span>
+                  <span class="thinking-label">思考过程</span>
+                </div>
+                <div class="thinking-content" v-if="expandedThinking.includes('current')">{{ currentThinking }}</div>
+              </div>
               <div class="current-answer" v-if="currentAnswer">{{ escapeHtml(currentAnswer) }}</div>
-              <div class="typing-indicator" v-if="!currentAnswer">
+              <div class="typing-indicator" v-if="!currentAnswer && !currentThinking">
                 <span></span><span></span><span></span>
               </div>
             </div>
@@ -84,179 +214,35 @@
           </div>
         </div>
       </div>
-
-      <div class="chat-sidebar">
-        <div class="sidebar-tabs">
-          <button class="sidebar-tab" :class="{ active: activeTab === 'results' }" @click="activeTab = 'results'">检索结果</button>
-          <button class="sidebar-tab" :class="{ active: activeTab === 'metrics' }" @click="activeTab = 'metrics'">评估指标</button>
-          <button class="sidebar-tab" :class="{ active: activeTab === 'graph' }" @click="activeTab = 'graph'">知识图谱</button>
-        </div>
-
-        <div class="sidebar-content">
-          <div class="sidebar-panel" :class="{ active: activeTab === 'results' }">
-            <div class="crag-status" v-if="lastResult">
-              <span class="status-badge" :class="cragStatusClass">{{ lastResult.crag_level }}</span>
-              <span class="crag-desc">{{ cragStatusDesc }}</span>
-            </div>
-            <div class="crag-status" v-else>
-              <span class="status-badge status-high">READY</span>
-              <span class="crag-desc">等待查询</span>
-            </div>
-
-            <div class="results-header">
-              <span class="results-count">检索文档</span>
-            </div>
-
-            <div id="docs-list">
-              <div v-if="!lastResult?.retrieved_documents?.length" class="empty-state" style="padding: 40px 20px;">
-                <div class="empty-state-title">暂无结果</div>
-                <div class="empty-state-desc">发送消息查看检索文档</div>
-              </div>
-              <div v-else>
-                <div
-                  v-for="(doc, i) in lastResult.retrieved_documents"
-                  :key="i"
-                  class="doc-card"
-                  :class="{ expanded: expandedDocs.includes(i) }"
-                >
-                  <div class="doc-header" @click="toggleDoc(i)">
-                    <span class="doc-title">{{ doc.chunk_id || `Doc ${i+1}` }}</span>
-                    <span class="doc-meta">
-                      <span class="text-dim">{{ (doc.relevance_score || 0).toFixed(2) }}</span>
-                      <span class="doc-expand-icon">▼</span>
-                    </span>
-                  </div>
-                  <div class="doc-content" v-if="expandedDocs.includes(i)">{{ doc.content ? escapeHtml(doc.content) : '' }}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="sidebar-panel" :class="{ active: activeTab === 'metrics' }">
-            <h3 class="section-title mb-md">评估指标</h3>
-
-            <div class="metrics-grid">
-              <div class="metric-mini">
-                <div class="metric-mini-value">{{ lastResult?.avg_score?.toFixed(3) || '--' }}</div>
-                <div class="metric-mini-label">相关性</div>
-              </div>
-              <div class="metric-mini">
-                <div class="metric-mini-value">{{ lastResult?.num_docs_used ?? '--' }}</div>
-                <div class="metric-mini-label">文档数</div>
-              </div>
-              <div class="metric-mini">
-                <div class="metric-mini-value">{{ lastResult?.used_web_search ? '是' : '--' }}</div>
-                <div class="metric-mini-label">网络搜索</div>
-              </div>
-              <div class="metric-mini">
-                <div class="metric-mini-value">{{ lastResult?.total_time_ms ? `${lastResult.total_time_ms}ms` : '--' }}</div>
-                <div class="metric-mini-label">耗时 (ms)</div>
-              </div>
-            </div>
-
-            <div class="expander" :class="{ open: pipelineExpanded }">
-              <div class="expander-header" @click="pipelineExpanded = !pipelineExpanded">
-                <span>流程详情</span>
-                <svg class="expander-icon" viewBox="0 0 24 24" width="20" height="20" :style="{ transform: pipelineExpanded ? 'rotate(180deg)' : '' }">
-                  <path fill="currentColor" d="M7 10l5 5 5-5z"/>
-                </svg>
-              </div>
-              <div class="expander-content">
-                <div class="expander-inner">
-                  <div v-if="!lastResult || !lastResult.pipeline_steps || lastResult.pipeline_steps.length === 0" class="pipeline-steps-empty">发送问题后查看流程详情</div>
-                  <div v-else>
-                    <div
-                      v-for="step in lastResult.pipeline_steps"
-                      :key="step.step"
-                      class="pipeline-step-card"
-                      :class="{ expanded: expandedSteps.includes(step.step) }"
-                    >
-                      <div class="pipeline-step-header" @click="toggleStep(step.step)">
-                        <span class="step-number">{{ step.step }}</span>
-                        <span class="step-name">{{ step.name_cn || step.name }}</span>
-                        <span class="step-desc">{{ step.description }}</span>
-                        <span class="step-time">{{ step.time_ms }}ms</span>
-                        <span class="step-toggle">{{ expandedSteps.includes(step.step) ? '▲' : '▼' }}</span>
-                      </div>
-                      <div class="pipeline-step-body" v-if="expandedSteps.includes(step.step)">
-                        <div class="pipeline-step-content">
-                          <div class="pipeline-step-section">
-                            <h4>输入</h4>
-                            <pre>{{ formatStepData(step.input_data) }}</pre>
-                          </div>
-                          <div class="pipeline-step-section">
-                            <h4>输出</h4>
-                            <pre>{{ formatStepData(step.output_data) }}</pre>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="sidebar-panel" :class="{ active: activeTab === 'graph' }">
-            <h3 class="section-title mb-md">知识图谱关系</h3>
-            <div v-if="!lastResult?.graph_results?.results?.length" class="empty-state" style="padding: 40px 20px;">
-              <div class="empty-state-title">暂无关系</div>
-              <div class="empty-state-desc">询问干员关系查看知识图谱</div>
-            </div>
-            <div v-else>
-              <div
-                v-for="(r, i) in lastResult.graph_results.results"
-                :key="i"
-                class="kg-relation"
-              >
-                <div class="kg-relation-title">
-                  <strong>{{ escapeHtml(r.operator1) }}</strong>
-                  <span class="text-primary"> --{{ escapeHtml(r.relation) }}--></span>
-                  <strong>{{ escapeHtml(r.operator2) }}</strong>
-                </div>
-                <div v-if="r.description" class="kg-relation-desc">{{ escapeHtml(r.description) }}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
 import { useSessionStore } from '../stores/sessions'
-import { useSettingsStore } from '../stores/settings'
 import { useQuickQuestionsStore } from '../stores/quickQuestions'
+import { useSettingsStore } from '../stores/settings'
 import { api, formatTime, escapeHtml } from '../api'
 import { generateQuickQuestions } from '../utils/quickQuestions'
 
 const sessionStore = useSessionStore()
-const settingsStore = useSettingsStore()
 const quickQuestionsStore = useQuickQuestionsStore()
-const route = useRoute()
+const settingsStore = useSettingsStore()
 
 const inputText = ref('')
 const isLoading = ref(false)
 const currentAnswer = ref('')
-const activeTab = ref('results')
-const pipelineExpanded = ref(false)
-const expandedDocs = ref([])
-const expandedSteps = ref([])
-const lastResult = ref(null)
+const expandedTools = ref([])
+const expandedThinking = ref([])
+const currentThinking = ref('')
 const messagesContainer = ref(null)
 const messageQueue = ref([])
 const abortController = ref(null)
 
-// Initialize lastResult from session storage on mount
+// Initialize on mount
 onMounted(() => {
-  console.log('[ChatView] mounted, currentSession:', sessionStore.currentSession?.id, 'lastResult:', sessionStore.currentSession?.lastResult)
-  if (sessionStore.currentSession?.lastResult) {
-    lastResult.value = sessionStore.currentSession.lastResult
-    console.log('[ChatView] restored lastResult')
-  }
+  console.log('[ChatView] mounted, currentSession:', sessionStore.currentSession?.id)
 
   // 只初始化一次快速问题
   if (!quickQuestionsStore.hasInitialized) {
@@ -302,13 +288,6 @@ watch(() => sessionStore.currentSessionId, (newId, oldId) => {
     }
   }
 
-  if (sessionStore.currentSession?.lastResult) {
-    lastResult.value = sessionStore.currentSession.lastResult
-    console.log('[ChatView] restored lastResult for new session')
-  } else {
-    lastResult.value = null
-  }
-
   // 切换会话时滚动到底部
   nextTick(() => scrollToBottom())
 
@@ -319,66 +298,38 @@ watch(() => sessionStore.currentSessionId, (newId, oldId) => {
   }
 })
 
-// Also watch for changes in the current session's lastResult
-watch(() => sessionStore.currentSession?.lastResult, (newResult) => {
-  if (newResult) {
-    console.log('[ChatView] lastResult updated in store')
-    lastResult.value = newResult
-  }
-})
 
-
-const cragStatusClass = computed(() => {
-  const level = lastResult.value?.crag_level
-  return {
-    'status-high': level === 'HIGH',
-    'status-low': level === 'LOW',
-    'status-direct': level === 'DIRECT'
-  }
-})
-
-const cragStatusDesc = computed(() => {
-  const level = lastResult.value?.crag_level
-  return {
-    'HIGH': '检索结果高质量',
-    'LOW': '检索结果低质量',
-    'DIRECT': '直接回答'
-  }[level] || '等待查询'
-})
-
-function toggleDoc(idx) {
-  const i = expandedDocs.value.indexOf(idx)
+function toggleToolResult(toolCallId) {
+  const i = expandedTools.value.indexOf(toolCallId)
   if (i > -1) {
-    expandedDocs.value.splice(i, 1)
+    expandedTools.value.splice(i, 1)
   } else {
-    expandedDocs.value.push(idx)
+    expandedTools.value.push(toolCallId)
   }
 }
 
-function toggleStep(step) {
-  const i = expandedSteps.value.indexOf(step)
-  if (i > -1) {
-    expandedSteps.value.splice(i, 1)
-  } else {
-    expandedSteps.value.push(step)
-  }
-}
-
-function formatStepData(data) {
+function formatToolResult(data) {
   if (data === null || data === undefined) return '无数据'
   if (typeof data === 'object') return JSON.stringify(data, null, 2)
   return String(data)
+}
+
+function toggleThinking(idx) {
+  const i = expandedThinking.value.indexOf(idx)
+  if (i > -1) {
+    expandedThinking.value.splice(i, 1)
+  } else {
+    expandedThinking.value.push(idx)
+  }
 }
 
 function autoResize(e) {
   const textarea = e.target
   const content = textarea.value.trim()
   if (!content) {
-    // 空内容时保持单行高度
     textarea.style.height = 'auto'
     textarea.style.overflowY = 'hidden'
   } else {
-    // 有内容时，超过最大高度才滚动
     textarea.style.height = 'auto'
     textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px'
     textarea.style.overflowY = textarea.scrollHeight > 150 ? 'auto' : 'hidden'
@@ -400,70 +351,167 @@ async function sendMessage() {
   isLoading.value = true
   inputText.value = ''
   currentAnswer.value = ''
-  expandedDocs.value = []
+  expandedTools.value = []
+  expandedThinking.value = []
+  currentThinking.value = ''
 
   sessionStore.addMessage('user', content)
-  // 用户发送消息后立即滚动到底部
   nextTick(() => scrollToBottom())
 
-  // 创建 AbortController 用于取消请求
+  // Create AbortController for cancellation
   if (abortController.value) {
     abortController.value.abort()
   }
   const controller = new AbortController()
   abortController.value = controller
 
-  let finalResult = null
+  // Get or create backend session
+  let backendSessionId = sessionStore.getBackendSessionId()
+  if (!backendSessionId) {
+    try {
+      const result = await api.createAgentSession()
+      backendSessionId = result.session_id
+      if (sessionStore.currentSessionId) {
+        sessionStore.backendSessionIds[sessionStore.currentSessionId] = backendSessionId
+        localStorage.setItem('arknights_rag_backend_sessions', JSON.stringify(sessionStore.backendSessionIds))
+      }
+    } catch (e) {
+      console.error('Failed to create backend session:', e)
+      sessionStore.addMessage('assistant', '错误: 无法创建会话，请重试')
+      isLoading.value = false
+      return
+    }
+  }
+
+  let currentRound = 0
+  let currentToolCallMsg = null
 
   try {
-    const history = sessionStore.currentSession.messages
-      .slice(0, -1)
-      .filter(m => m.role === 'user' || m.role === 'assistant')
-      .slice(-6)
-      .map(m => ({ role: m.role, content: m.content }))
+    await api.agentChat({
+      sessionId: backendSessionId,
+      message: content,
+      model: settingsStore.currentModel || undefined,
+      signal: controller.signal,
 
-    // 使用非流式接口
-    const result = await api.query(content, {
-      conversation_history: history,
-      ...settingsStore.getRAGSettings()
-    }, controller.signal)
+      onNewSessionId(newSid) {
+        // Server auto-created a new session (old one expired)
+        console.log('[ChatView] Session expired, server created new session:', newSid)
+        backendSessionId = newSid
+        if (sessionStore.currentSessionId) {
+          sessionStore.backendSessionIds[sessionStore.currentSessionId] = newSid
+          localStorage.setItem('arknights_rag_backend_sessions', JSON.stringify(sessionStore.backendSessionIds))
+        }
+      },
 
-    // 直接显示完整答案
-    currentAnswer.value = result.answer
-    scrollToBottom()
+      onToolCallsStart(event) {
+        currentRound = event.round || currentRound + 1
+        const calls = event.tool_calls.map(tc => ({
+          id: tc.id,
+          name: tc.name,
+          arguments_summary: summarizeToolArgs(tc.name, tc.arguments),
+        }))
+        sessionStore.addToolCallMessage(calls, currentRound)
+        currentToolCallMsg = calls
+        nextTick(() => scrollToBottom())
+      },
 
-    // 保存最终结果
-    finalResult = result
-    lastResult.value = finalResult
-    sessionStore.setLastResult(finalResult)
-    // 将完整答案添加到消息列表
-    sessionStore.addMessage('assistant', finalResult.answer)
+      onToolCallResult(event) {
+        sessionStore.updateToolCallResult(event.tool_call_id, {
+          summary: event.summary || '完成',
+          time_ms: event.time_ms || 0,
+          tool_name: event.tool_name || '',
+          result: event.result || null,
+        })
+        nextTick(() => scrollToBottom())
+      },
+
+      onAnswerDelta(event) {
+        currentAnswer.value += event.delta || ''
+        nextTick(() => scrollToBottom())
+      },
+
+      onThinkingDelta(event) {
+        currentThinking.value += event.content || ''
+        nextTick(() => scrollToBottom())
+      },
+
+      onAnswerDone(event) {
+        // Finalize: add complete answer as assistant message
+        const answer = event.answer || currentAnswer.value
+        sessionStore.addMessage('assistant', answer, currentThinking.value ? { thinking: currentThinking.value } : {})
+        currentAnswer.value = ''
+        currentThinking.value = ''
+      },
+
+      onError(event) {
+        console.error('Agent error:', event.message)
+        sessionStore.addMessage('assistant', `错误: ${event.message || '未知错误'}`)
+      },
+    })
   } catch (error) {
-    // 确保状态完全清理
+    // Save partial answer before clearing
+    const partialAnswer = currentAnswer.value
+
     isLoading.value = false
     currentAnswer.value = ''
 
-    // 如果是请求被中止，添加提示消息
     if (error.name === 'AbortError') {
-      console.log('[ChatView] 请求被用户中止')
-      sessionStore.addMessage('assistant', '请求被中断，请重新发送消息')
+      console.log('[ChatView] Request aborted')
+      if (partialAnswer) {
+        sessionStore.addMessage('assistant', partialAnswer)
+      }
     } else {
-      console.error('[ChatView] Query error:', error)
+      console.error('[ChatView] Agent chat error:', error)
       sessionStore.addMessage('assistant', `错误: ${error.message}`)
     }
   }
 
-  // 清理 AbortController
   abortController.value = null
-
   isLoading.value = false
   nextTick(() => scrollToBottom())
 
-  // Process queue if there's a pending message
+  // Process queue
   if (messageQueue.value.length > 0) {
     const nextContent = messageQueue.value.shift()
     inputText.value = nextContent
     sendMessage()
+  }
+}
+
+function summarizeToolArgs(toolName, args) {
+  // args is already a parsed object (not a string) from the SSE event
+  if (!args || typeof args === 'string') {
+    try { args = JSON.parse(args || '{}') } catch { return String(args).substring(0, 80) }
+  }
+  switch (toolName) {
+    case 'arknights_rag_search':
+      return `查询: "${args.query || ''}"`
+    case 'arknights_graphrag_search':
+      return args.entity1 && args.entity2
+        ? `关系: ${args.entity1} → ${args.entity2}`
+        : `实体: ${args.entity || ''}`
+    case 'web_search':
+      return `搜索: "${args.query || ''}"`
+    default:
+      return JSON.stringify(args).substring(0, 80)
+  }
+}
+
+function getToolIcon(name) {
+  switch (name) {
+    case 'arknights_rag_search': return '📚'
+    case 'arknights_graphrag_search': return '🕸️'
+    case 'web_search': return '🌐'
+    default: return '🔧'
+  }
+}
+
+function getToolDisplayName(name) {
+  switch (name) {
+    case 'arknights_rag_search': return '知识库检索'
+    case 'arknights_graphrag_search': return '图谱查询'
+    case 'web_search': return '网络搜索'
+    default: return name
   }
 }
 
@@ -575,7 +623,7 @@ function scrollToBottom() {
 <style scoped>
 .chat-page { display: flex; flex-direction: column; height: calc(100vh - 80px); }
 .chat-main { flex: 1; display: flex; overflow: hidden; }
-.chat-panel { flex: 1; display: flex; flex-direction: column; border-right: 1px solid var(--border-color); }
+.chat-panel { flex: 1; display: flex; flex-direction: column; }
 .chat-messages { flex: 1; overflow-y: auto; padding: var(--spacing-lg); min-height: 0; }
 .chat-input-area { padding: var(--spacing-lg); background: var(--bg-panel); border-top: 1px solid var(--border-color); }
 .chat-form { display: flex; gap: var(--spacing-md); align-items: center; }
@@ -585,22 +633,18 @@ function scrollToBottom() {
 .chat-submit:hover { transform: scale(1.05); box-shadow: 0 0 20px var(--color-primary-glow); }
 .chat-submit:active { transform: scale(0.95); }
 .chat-submit:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-.chat-sidebar { width: 380px; display: flex; flex-direction: column; background: var(--bg-dark); overflow: hidden; }
-.sidebar-tabs { display: flex; border-bottom: 1px solid var(--border-color); }
-.sidebar-tab { flex: 1; padding: var(--spacing-md); background: transparent; border: none; color: var(--text-secondary); font-family: var(--font-display); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; cursor: pointer; transition: all var(--transition-fast); position: relative; }
-.sidebar-tab:hover { color: var(--text-primary); background: var(--bg-panel); }
-.sidebar-tab.active { color: var(--color-primary); }
-.sidebar-tab.active::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 2px; background: var(--color-primary); box-shadow: 0 0 10px var(--color-primary-glow); }
-.sidebar-content { flex: 1; overflow-y: auto; padding: var(--spacing-lg); max-height: calc(100vh - 80px - 50px); }
-.sidebar-panel { display: none; }
-.sidebar-panel.active { display: block; }
-.crag-status { display: flex; align-items: center; gap: var(--spacing-md); padding: var(--spacing-md); background: var(--bg-card); border-radius: var(--radius-md); margin-bottom: var(--spacing-lg); }
-.results-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-md); }
-.results-count { font-size: 0.85rem; color: var(--text-secondary); }
-.metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--spacing-md); margin-bottom: var(--spacing-lg); }
-.metric-mini { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--spacing-md); text-align: center; }
-.metric-mini-value { font-family: var(--font-mono); font-size: 1.25rem; color: var(--color-primary); }
-.metric-mini-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-top: var(--spacing-xs); }
+
+
+/* Mobile: hide sidebar, full-screen chat */
+@media (max-width: 768px) {
+  .chat-page { height: calc(100vh - 60px); }
+  .chat-input-area { padding: var(--spacing-md); }
+  .chat-messages { padding: var(--spacing-md); }
+  .quick-actions { gap: var(--spacing-xs); }
+  .quick-action { font-size: 0.75rem; padding: var(--spacing-xs) var(--spacing-sm); }
+  .chat-message { max-width: 92%; }
+  .chat-bubble { padding: var(--spacing-sm) var(--spacing-md); }
+}
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: var(--spacing-xl); }
 .empty-state-title { font-family: var(--font-display); font-size: 1.25rem; color: var(--text-secondary); margin-bottom: var(--spacing-sm); }
 .empty-state-desc { font-size: 0.9rem; color: var(--text-dim); max-width: 300px; }
@@ -641,6 +685,13 @@ function scrollToBottom() {
 .chat-role { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: var(--spacing-xs); opacity: 0.7; }
 .chat-text { line-height: 1.6; white-space: pre-wrap; }
 .chat-time { font-size: 0.7rem; opacity: 0.5; margin-top: var(--spacing-xs); text-align: right; }
+/* Thinking content */
+.thinking-section { margin-bottom: var(--spacing-sm); }
+.thinking-toggle { display: flex; align-items: center; gap: var(--spacing-xs); cursor: pointer; padding: 2px 0; }
+.thinking-toggle:hover { opacity: 0.8; }
+.thinking-icon { font-size: 0.6rem; color: var(--text-dim); }
+.thinking-label { font-size: 0.7rem; color: var(--text-dim); font-style: italic; }
+.thinking-content { font-size: 0.75rem; color: var(--text-dim); background: var(--bg-dark); border: 1px dashed var(--border-color); border-radius: var(--radius-sm); padding: var(--spacing-sm); margin-top: var(--spacing-xs); max-height: 200px; overflow-y: auto; white-space: pre-wrap; line-height: 1.5; }
 .typing-indicator { display: flex; gap: 4px; padding: var(--spacing-md); }
 .typing-indicator span { width: 8px; height: 8px; background: var(--text-secondary); border-radius: 50%; animation: typingBounce 1.4s infinite ease-in-out; }
 .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
@@ -648,53 +699,71 @@ function scrollToBottom() {
 .typing-indicator span:nth-child(3) { animation-delay: 0s; }
 @keyframes typingBounce { 0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
 .current-answer { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
-.doc-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); margin-bottom: var(--spacing-sm); overflow: hidden; }
-.doc-header { display: flex; justify-content: space-between; align-items: center; padding: var(--spacing-sm) var(--spacing-md); cursor: pointer; transition: background var(--transition-fast); }
-.doc-header:hover { background: var(--bg-panel-hover); }
-.doc-title { font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-primary); }
-.doc-meta { display: flex; align-items: center; gap: var(--spacing-sm); }
-.doc-expand-icon { font-size: 0.6rem; color: var(--text-dim); transition: transform var(--transition-fast); }
-.doc-card.expanded .doc-expand-icon { transform: rotate(180deg); }
-.doc-content { display: none; padding: var(--spacing-md); border-top: 1px solid var(--border-color); font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6; max-height: 300px; overflow-y: auto; white-space: pre-wrap; }
-.doc-card.expanded .doc-content { display: block; }
-.expander { border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; }
-.expander-header { padding: var(--spacing-md); background: var(--bg-panel); cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background var(--transition-fast); }
-.expander-header:hover { background: var(--bg-panel-hover); }
-.expander-icon { transition: transform var(--transition-fast); }
-.expander-content { max-height: 0; overflow: hidden; transition: max-height var(--transition-normal); }
-.expander.open .expander-content { max-height: 800px; overflow-y: auto; }
-.expander-inner { padding: var(--spacing-md); background: var(--bg-dark); border-top: 1px solid var(--border-color); }
-.pipeline-steps-empty { padding: var(--spacing-lg); text-align: center; color: var(--text-dim); font-size: 0.85rem; }
-.pipeline-step-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; margin-bottom: var(--spacing-sm); }
-.pipeline-step-header { display: flex; align-items: center; padding: var(--spacing-sm) var(--spacing-md); gap: var(--spacing-sm); }
-.pipeline-step-card .step-number { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: var(--bg-panel); color: var(--color-primary); border: 1px solid var(--color-primary); border-radius: 50%; font-family: var(--font-mono); font-size: 0.7rem; font-weight: 600; flex-shrink: 0; }
-.pipeline-step-card .step-name { font-size: 0.85rem; font-weight: 500; color: var(--text-primary); min-width: 100px; }
-.pipeline-step-card .step-desc { font-size: 0.85rem; color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
-.pipeline-step-card .step-time { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-primary); margin-left: auto; }
-.pipeline-step-card .step-toggle { font-size: 0.6rem; color: var(--text-dim); margin-left: var(--spacing-xs); }
-.pipeline-step-card .pipeline-step-header { cursor: pointer; }
-.pipeline-step-card .pipeline-step-body { border-top: 1px solid var(--border-color); background: var(--bg-panel); }
-.pipeline-step-card .pipeline-step-content { padding: var(--spacing-sm) var(--spacing-md); }
-.pipeline-step-card .pipeline-step-section { margin-bottom: var(--spacing-sm); }
-.pipeline-step-card .pipeline-step-section:last-child { margin-bottom: 0; }
-.pipeline-step-card .pipeline-step-section h4 { font-size: 0.75rem; color: var(--text-secondary); margin-bottom: var(--spacing-xs); text-transform: uppercase; letter-spacing: 0.05em; }
-.pipeline-step-card .pipeline-step-section pre { background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: var(--spacing-sm); font-size: 0.7rem; color: var(--text-secondary); overflow-x: auto; white-space: pre-wrap; word-break: break-all; max-height: 150px; overflow-y: auto; }
-.kg-relation { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--spacing-md); margin-bottom: var(--spacing-sm); }
-.kg-relation-title { font-family: var(--font-mono); font-size: 0.85rem; margin-bottom: var(--spacing-xs); }
-.kg-relation-desc { font-size: 0.8rem; color: var(--text-secondary); }
 @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes rotate360 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-.mb-md { margin-bottom: var(--spacing-md); }
-.section-title { font-family: var(--font-display); font-size: 0.9rem; color: var(--text-primary); }
 .pending-messages { display: flex; flex-direction: column; gap: var(--spacing-sm); padding: var(--spacing-md); }
 .pending-message { display: flex; align-items: center; gap: var(--spacing-sm); padding: var(--spacing-sm) var(--spacing-md); background: var(--bg-panel); border: 1px dashed var(--border-color); border-radius: var(--radius-md); font-size: 0.85rem; opacity: 0.7; }
 .pending-label { color: var(--text-dim); font-size: 0.75rem; flex-shrink: 0; }
 .pending-text { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 0.75rem; font-weight: 600; }
-.status-badge { background: transparent; }
-.status-badge.status-high { color: var(--status-high); }
-.status-badge.status-medium { color: var(--status-medium); }
-.status-badge.status-low { color: var(--status-low); }
-.status-badge.status-direct { color: var(--color-primary); }
-.step-rag-tag { font-size: 0.65rem; padding: 1px 6px; border-radius: 8px; margin-left: var(--spacing-xs); background: rgba(0, 229, 204, 0.15); color: var(--color-primary); }
+.quick-action { padding: var(--spacing-xs) var(--spacing-md); background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: var(--radius-lg); color: var(--text-secondary); font-size: 0.8rem; cursor: pointer; transition: all var(--transition-fast); }
+.quick-action:hover { border-color: var(--color-primary-dim); color: var(--color-primary); }
+.quick-action.refresh:hover { border-color: var(--color-primary); }
+.refresh-fixed { margin-left: auto; flex-shrink: 0; }
+.quick-action.refresh { background: var(--bg-panel); color: var(--color-primary); padding: var(--spacing-xs); border-color: var(--color-primary-dim); display: flex; align-items: center; justify-content: center; min-width: 38px; min-height: 38px; }
+.refresh-icon { transition: transform var(--transition-fast); width: 18px; height: 18px; }
+.quick-action.refresh:hover .refresh-icon { transform: rotate(180deg); }
+.refresh-icon.rotating { animation: rotate360 0.6s ease-out; }
+
+/* Tool call display */
+.tool-call-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--spacing-md); max-width: 85%; margin-bottom: var(--spacing-md); animation: fadeSlideIn 0.3s ease-out; margin-right: auto; }
+.tool-call-header { display: flex; align-items: center; gap: var(--spacing-sm); margin-bottom: var(--spacing-sm); }
+.tool-call-round { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.7; }
+.tool-call-count { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.7; }
+.tool-call-list { display: flex; flex-direction: column; gap: var(--spacing-xs); }
+.tool-call-item { display: flex; flex-direction: column; gap: 2px; padding: var(--spacing-xs) var(--spacing-sm); background: var(--bg-panel); border-radius: var(--radius-sm); border-left: 3px solid var(--text-dim); transition: border-color var(--transition-fast); cursor: pointer; position: relative; }
+.tool-call-item.has-result { border-left-color: var(--color-primary); }
+.tool-call-name-row { display: flex; justify-content: space-between; align-items: center; gap: var(--spacing-sm); }
+.tool-call-name-row:hover { opacity: 0.85; }
+.tool-call-name { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.7; display: flex; align-items: center; gap: var(--spacing-xs); flex-shrink: 0; }
+.tool-icon { font-size: 0.85rem; }
+.tool-call-meta { display: flex; align-items: center; gap: var(--spacing-sm); flex-wrap: wrap; justify-content: flex-end; }
+.tool-call-args { font-size: 0.7rem; color: var(--text-secondary); }
+.tool-result-time { font-size: 0.65rem; color: var(--text-dim); font-family: var(--font-mono); flex-shrink: 0; }
+.tool-result-summary { font-size: 0.7rem; opacity: 0.7; padding-left: 22px; }
+.tool-result-detail { padding: var(--spacing-sm) 0 0 22px; position: relative; }
+.tool-result-detail pre { background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: var(--spacing-sm); font-size: 0.7rem; color: var(--text-secondary); overflow-x: auto; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow-y: auto; margin: 0; }
+.tool-call-pending { font-size: 0.7rem; color: var(--text-dim); padding-left: 22px; display: flex; align-items: center; gap: 4px; }
+.pending-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-primary); animation: pendingPulse 1s infinite ease-in-out; }
+@keyframes pendingPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+
+/* Tool detail expanded content */
+.tool-call-item.is-expanded { border-left-color: var(--color-primary); }
+.tool-detail-summary { font-size: 0.75rem; color: var(--text-secondary); margin-bottom: var(--spacing-sm); padding-bottom: var(--spacing-xs); border-bottom: 1px dashed var(--border-color); }
+.tool-detail-content { display: flex; flex-direction: column; gap: var(--spacing-sm); margin-top: var(--spacing-xs); }
+.tool-detail-empty { font-size: 0.75rem; color: var(--text-dim); font-style: italic; }
+
+/* RAG search docs */
+.tool-detail-doc { background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: var(--spacing-sm); }
+.tool-detail-doc-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-xs); }
+.tool-detail-doc-source { font-size: 0.7rem; color: var(--color-primary); font-weight: 500; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-detail-doc-score { font-size: 0.65rem; color: var(--text-dim); font-family: var(--font-mono); background: var(--bg-panel); padding: 1px 6px; border-radius: 4px; }
+.tool-detail-doc-content { font-size: 0.72rem; color: var(--text-secondary); line-height: 1.5; max-height: 160px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+
+/* GraphRAG results */
+.tool-detail-graph { display: flex; flex-direction: column; gap: var(--spacing-sm); }
+.tool-detail-graph-path { font-size: 0.75rem; color: var(--text-secondary); padding: var(--spacing-xs) var(--spacing-sm); background: var(--bg-dark); border-radius: var(--radius-sm); }
+.tool-detail-graph-edge { font-size: 0.72rem; color: var(--text-secondary); padding: var(--spacing-xs) var(--spacing-sm); background: var(--bg-dark); border-radius: var(--radius-sm); }
+.graph-node { color: var(--color-primary); font-weight: 500; }
+.graph-relation { color: var(--text-dim); font-style: italic; margin: 0 4px; }
+.graph-arrow { color: var(--text-dim); margin: 0 2px; }
+.graph-edge-desc { font-size: 0.65rem; color: var(--text-dim); margin-top: 2px; padding-left: 8px; font-style: italic; }
+.graph-direction-label { font-size: 0.7rem; color: var(--text-dim); font-weight: 500; margin-top: var(--spacing-xs); padding: 2px 0; }
+.tool-detail-graph-entity { font-size: 0.75rem; color: var(--color-primary); font-weight: 500; margin-bottom: var(--spacing-xs); }
+
+/* Web search results */
+.tool-detail-web { background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: var(--spacing-sm); }
+.tool-detail-web-title { font-size: 0.78rem; margin-bottom: var(--spacing-xs); }
+.tool-detail-web-title a { color: var(--color-primary); text-decoration: none; font-weight: 500; }
+.tool-detail-web-title a:hover { text-decoration: underline; }
+.tool-detail-web-content { font-size: 0.72rem; color: var(--text-secondary); line-height: 1.5; max-height: 120px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
 </style>

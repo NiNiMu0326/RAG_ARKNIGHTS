@@ -1,8 +1,35 @@
 import { ref, reactive } from 'vue'
 import { api } from '../api'
 
+// Helper: flatten entities dict to array for search/display
+function flattenEntities(entities) {
+  if (!entities) return []
+  // New dict format: {"干员": ["银灰", ...], "组织": ["罗德岛", ...]}
+  if (typeof entities === 'object' && !Array.isArray(entities)) {
+    return Object.entries(entities).flatMap(([type, names]) =>
+      (names || []).map(name => ({ entity: name, type }))
+    )
+  }
+  // Old array format fallback
+  return Array.isArray(entities) ? entities : []
+}
+
+// Helper: count total entities in dict format
+function countEntities(entities) {
+  if (!entities) return 0
+  if (typeof entities === 'object' && !Array.isArray(entities)) {
+    return Object.values(entities).reduce((sum, arr) => sum + (arr?.length || 0), 0)
+  }
+  return Array.isArray(entities) ? entities.length : 0
+}
+
+// Helper: check if entities data is empty
+function isEntitiesEmpty(entities) {
+  return !entities || countEntities(entities) === 0
+}
+
 // Singleton state shared between AppSidebar and GraphView
-const graphData = ref({ entities: [], relations: [] })
+const graphData = ref({ entities: {}, relations: [] })
 const selectedNodes = ref([])
 const selectedRelations = ref([])
 const neighborLevel = ref(1)
@@ -32,7 +59,7 @@ export function useGraphController() {
       loading.value = true
       const data = await api.getGraphData()
       graphData.value = data
-      console.log('loadGraphData success, entities:', data.entities?.length, 'relations:', data.relations?.length)
+      console.log('loadGraphData success, entities:', countEntities(data.entities), 'relations:', data.relations?.length)
       prepareRelationColors()
       updateStats()
     } catch (error) {
@@ -55,7 +82,7 @@ export function useGraphController() {
   }
 
   function updateStats() {
-    stats.nodes = graphData.value.entities?.length || 0
+    stats.nodes = countEntities(graphData.value.entities)
     stats.edges = graphData.value.relations?.length || 0
   }
 
@@ -93,7 +120,7 @@ export function useGraphController() {
   // Search
   function handleSearch(query) {
     searchQuery.value = query
-    const entities = graphData.value.entities || []
+    const entities = flattenEntities(graphData.value.entities)
     console.log('handleSearch:', query, 'entities:', entities.length)
     if (!query || query.length < 1) {
       searchResults.value = [...entities].sort((a, b) => a.entity.localeCompare(b.entity))
@@ -107,9 +134,9 @@ export function useGraphController() {
 
   function onSearchFocus() {
     searchFocused.value = true
-    console.log('onSearchFocus, searchFocused:', searchFocused.value, 'entities:', (graphData.value.entities || []).length)
+    console.log('onSearchFocus, searchFocused:', searchFocused.value, 'entities:', countEntities(graphData.value.entities))
     if (!searchQuery.value.trim()) {
-      searchResults.value = [...(graphData.value.entities || [])].sort((a, b) => a.entity.localeCompare(b.entity))
+      searchResults.value = flattenEntities(graphData.value.entities).sort((a, b) => a.entity.localeCompare(b.entity))
     }
   }
 
@@ -213,3 +240,5 @@ export function useGraphController() {
     setNeighborLevel
   }
 }
+
+export { flattenEntities, countEntities, isEntitiesEmpty }

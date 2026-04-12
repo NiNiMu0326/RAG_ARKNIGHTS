@@ -1,22 +1,27 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { api } from '../api'
+import { useAuthStore } from './auth'
 
 export const useSessionStore = defineStore('sessions', () => {
   const sessions = ref({})
   const currentSessionId = ref(null)
   const lastActiveSessionId = ref(null)
+  // Backend agent session ID mapping: frontendSessionId -> backendSessionId
+  const backendSessionIds = ref({})
 
-  function loadSessions() {
+  function _isEmptySession(s) {
+    return s.isEmpty || !s.name || s.name.trim() === '' ||
+      (s.name === '新会话' && (!s.messages || s.messages.length === 0))
+  }
+
+  function _loadFromLocalStorage() {
     const saved = localStorage.getItem('arknights_rag_sessions')
     if (saved) {
       try {
         const parsed = JSON.parse(saved)
-        // 清理没有有效名字的会话（空字符串或只有空白字符）
         Object.keys(parsed).forEach(id => {
-          const s = parsed[id]
-          if (!s.name || s.name.trim() === '') {
-            delete parsed[id]
-          }
+          if (_isEmptySession(parsed[id])) delete parsed[id]
         })
         sessions.value = parsed
       } catch (e) {
@@ -24,10 +29,46 @@ export const useSessionStore = defineStore('sessions', () => {
         sessions.value = {}
       }
     }
+  }
+
+  async function loadSessions() {
+    const authStore = useAuthStore()
+    if (authStore.isLoggedIn) {
+      try {
+        const res = await api.listConversations()
+        const newSessions = {}
+        for (const conv of res.conversations) {
+          let messages = []
+          try {
+            const msgRes = await api.getConversationMessages(conv.session_id)
+            messages = msgRes.messages.map(m => ({
+              role: m.role,
+              content: m.content,
+              timestamp: new Date(m.created_at).getTime(),
+              ...(m.metadata || {})
+            }))
+          } catch (e) {
+            console.warn(`Failed to load messages for ${conv.session_id}:`, e)
+          }
+          newSessions[conv.session_id] = {
+            id: conv.session_id,
+            name: conv.name,
+            messages,
+            createdAt: new Date(conv.created_at).getTime(),
+            updatedAt: new Date(conv.updated_at).getTime(),
+          }
+        }
+        sessions.value = newSessions
+      } catch (e) {
+        console.warn('Failed to load sessions from server, falling back to localStorage:', e)
+        _loadFromLocalStorage()
+      }
+    } else {
+      _loadFromLocalStorage()
+    }
+
     const lastActive = localStorage.getItem('arknights_rag_last_session')
     const sessionIds = Object.keys(sessions.value)
-
-    // 只有存在有效会话时才设置 currentSessionId
     if (sessionIds.length > 0) {
       if (lastActive && sessions.value[lastActive]) {
         currentSessionId.value = lastActive
@@ -35,56 +76,112 @@ export const useSessionStore = defineStore('sessions', () => {
         currentSessionId.value = sessionIds[0]
       }
       lastActiveSessionId.value = currentSessionId.value
-    } else {
-      // 如果没有有效会话，创建一个默认会话
-      const defaultSessionId = 'session_' + Date.now()
-      sessions.value[defaultSessionId] = {
-        id: defaultSessionId,
-        name: '新会话',
-        messages: [],
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-      }
-      currentSessionId.value = defaultSessionId
-      lastActiveSessionId.value = defaultSessionId
-      saveSessions()
     }
   }
 
-  function saveSessions() {
-    localStorage.setItem('arknights_rag_sessions', JSON.stringify(sessions.value))
-    localStorage.setItem('arknights_rag_last_session', currentSessionId.value)
+  async function saveSessions() {
+    const toSave = {}
+    Object.keys(sessions.value).forEach(id => {
+      if (!_isEmptySession(sessions.value[id])) {
+        toSave[id] = sessions.value[id]
+      }
+    })
+
+    // Always save to localStorage as cache
+    localStorage.setItem('arknights_rag_sessions', JSON.stringify(toSave))
+    if (currentSessionId.value && !_isEmptySession(sessions.value[currentSessionId.value])) {
+      localStorage.setItem('arknights_rag_last_session', currentSessionId.value)
+    }
+
+    // Sync to server if logged in
+    const authStore = useAuthStore()
+    if (authStore.isLoggedIn) {
+      try {
+        const convs = Object.values(toSave).map(s => ({
+          session_id: s.id,
+          name: s.name || '',
+          created_at: new Date(s.createdAt).toISOString(),
+          updated_at: new Date(s.updatedAt).toISOString(),
+          messages: (s.messages || []).map(m => ({
+            role: m.role,
+            content: m.content,
+            metadata: {
+              timestamp: m.timestamp,
+              ...(m.results ? { results: m.results } : {}),
+              ...(m.round ? { round: m.round } : {}),
+              ...(m.calls ? { calls: m.calls } : {})
+            },
+            created_at: new Date(m.timestamp).toISOString(),
+          }))
+        }))
+        await api.syncConversations(convs)
+      } catch (e) {
+        console.warn('Failed to sync sessions to server:', e)
+      }
+    }
   }
 
-  function createNewSession() {
-    // 创建新会话并保存
+  async function createNewSession() {
+    // If current session is already empty, reuse it instead of creating a new one
+    const current = sessions.value[currentSessionId.value]
+    if (current && _isEmptySession(current)) {
+      return currentSessionId.value
+    }
+
+    // Create frontend session with isEmpty flag (won't show in sidebar until first message)
     const id = 'session_' + Date.now()
     sessions.value[id] = {
       id,
-      name: '新会话',
+      name: '',
       messages: [],
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      isEmpty: true
     }
     currentSessionId.value = id
     lastActiveSessionId.value = id
+
+    // Create backend agent session
+    try {
+      const result = await api.createAgentSession()
+      backendSessionIds.value[id] = result.session_id
+      localStorage.setItem('arknights_rag_backend_sessions', JSON.stringify(backendSessionIds.value))
+    } catch (e) {
+      console.error('Failed to create backend session:', e)
+    }
+
     saveSessions()
     return id
   }
 
-  function deleteSession(sessionId) {
-    const sessionIds = Object.keys(sessions.value)
-    if (sessionIds.length <= 1) {
-      // 删除最后一个会话，清空所有状态
-      delete sessions.value[sessionId]
-      currentSessionId.value = null
-      lastActiveSessionId.value = null
-      saveSessions()
-      return true
+  function getBackendSessionId(frontendId) {
+    return backendSessionIds.value[frontendId || currentSessionId.value]
+  }
+
+  async function deleteSession(sessionId) {
+    // Delete backend agent session
+    const backendId = backendSessionIds.value[sessionId]
+    if (backendId) {
+      try { await api.deleteAgentSession(backendId) } catch (e) { console.warn('Failed to delete backend session:', e) }
+      delete backendSessionIds.value[sessionId]
+      localStorage.setItem('arknights_rag_backend_sessions', JSON.stringify(backendSessionIds.value))
     }
+
+    // Delete from server if logged in
+    const authStore = useAuthStore()
+    if (authStore.isLoggedIn) {
+      try { await api.deleteConversation(sessionId) } catch (e) { console.warn('Failed to delete conversation from server:', e) }
+    }
+
     delete sessions.value[sessionId]
     if (currentSessionId.value === sessionId) {
-      currentSessionId.value = Object.keys(sessions.value)[0]
+      const remaining = Object.keys(sessions.value).sort(
+        (a, b) => sessions.value[b].updatedAt - sessions.value[a].updatedAt
+      )
+      currentSessionId.value = remaining.length > 0 ? remaining[0] : null
+    }
+    if (lastActiveSessionId.value === sessionId) {
+      lastActiveSessionId.value = currentSessionId.value
     }
     saveSessions()
     return true
@@ -93,22 +190,28 @@ export const useSessionStore = defineStore('sessions', () => {
   function switchSession(sessionId) {
     if (sessions.value[sessionId]) {
       currentSessionId.value = sessionId
+      lastActiveSessionId.value = sessionId
       localStorage.setItem('arknights_rag_last_session', sessionId)
     }
   }
 
-  function renameSession(sessionId, newName) {
+  async function renameSession(sessionId, newName) {
     if (sessions.value[sessionId]) {
       sessions.value[sessionId].name = newName
       sessions.value[sessionId].updatedAt = Date.now()
+      // Rename on server if logged in
+      const authStore = useAuthStore()
+      if (authStore.isLoggedIn) {
+        try { await api.renameConversation(sessionId, newName) } catch (e) { console.warn('Failed to rename on server:', e) }
+      }
       saveSessions()
     }
   }
 
-  function addMessage(role, content) {
+  function addMessage(role, content, extra = {}) {
     let targetSessionId = currentSessionId.value
 
-    // 如果没有目标会话，创建一个新会话（必须保存）
+    // If current session doesn't exist, create it
     if (!targetSessionId || !sessions.value[targetSessionId]) {
       targetSessionId = 'session_' + Date.now()
       sessions.value[targetSessionId] = {
@@ -123,7 +226,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
     const session = sessions.value[targetSessionId]
     if (session) {
-      // 如果是用户的第一条消息，用这条消息作为会话名称
+      // Use first user message as session name
       if (role === 'user' && session.messages.length === 0) {
         const trimmed = content.trim()
         if (trimmed.length > 0) {
@@ -132,44 +235,105 @@ export const useSessionStore = defineStore('sessions', () => {
           session.name = '新会话'
         }
         lastActiveSessionId.value = targetSessionId
+        if (session.isEmpty) {
+          delete session.isEmpty
+        }
       }
-      session.messages.push({ role, content, timestamp: Date.now() })
+      session.messages.push({ role, content, timestamp: Date.now(), ...extra })
       session.updatedAt = Date.now()
       saveSessions()
     }
   }
 
-  function setLastResult(result) {
-    const targetSessionId = currentSessionId.value
+  function addToolCallMessage(toolCalls, roundNum) {
+    let targetSessionId = currentSessionId.value
+    if (!targetSessionId || !sessions.value[targetSessionId]) return
+
     const session = sessions.value[targetSessionId]
-    if (!session) return
-    // Only save essential display data, not full document contents
-    session.lastResult = {
-      crag_level: result.crag_level,
-      avg_score: result.avg_score,
-      num_docs_used: result.num_docs_used,
-      used_web_search: result.used_web_search,
-      total_time_ms: result.total_time_ms,
-      pipeline_steps: result.pipeline_steps,
-      retrieved_documents: result.retrieved_documents?.map(d => ({
-        chunk_id: d.chunk_id,
-        relevance_score: d.relevance_score,
-        content: d.content?.substring(0, 200) // Only first 200 chars
-      })),
-      graph_results: result.graph_results
-    }
+    session.messages.push({
+      role: 'tool_call',
+      round: roundNum,
+      calls: toolCalls,
+      timestamp: Date.now(),
+    })
     session.updatedAt = Date.now()
-    try {
+    saveSessions()
+  }
+
+  function updateToolCallResult(toolCallId, result) {
+    let targetSessionId = currentSessionId.value
+    if (!targetSessionId || !sessions.value[targetSessionId]) return
+
+    const session = sessions.value[targetSessionId]
+    const msg = session.messages.find(
+      m => m.role === 'tool_call' && m.calls?.some(c => c.id === toolCallId)
+    )
+    if (msg) {
+      if (!msg.results) msg.results = {}
+      msg.results[toolCallId] = {
+        summary: result.summary || '完成',
+        time_ms: result.time_ms || 0,
+        tool_name: result.tool_name || '',
+        data: result.result || null,
+      }
       saveSessions()
-    } catch (e) {
-      console.warn('Failed to save lastResult:', e)
     }
   }
 
-  const currentSession = computed(() => sessions.value[currentSessionId.value])
+  async function mergeLocalToServer() {
+    const authStore = useAuthStore()
+    if (!authStore.isLoggedIn) return
+
+    const toSave = {}
+    Object.keys(sessions.value).forEach(id => {
+      if (!_isEmptySession(sessions.value[id])) toSave[id] = sessions.value[id]
+    })
+
+    if (Object.keys(toSave).length > 0) {
+      try {
+        const convs = Object.values(toSave).map(s => ({
+          session_id: s.id,
+          name: s.name || '',
+          created_at: new Date(s.createdAt).toISOString(),
+          updated_at: new Date(s.updatedAt).toISOString(),
+          messages: (s.messages || []).map(m => ({
+            role: m.role,
+            content: m.content,
+            metadata: {
+              timestamp: m.timestamp,
+              ...(m.results ? { results: m.results } : {}),
+              ...(m.round ? { round: m.round } : {}),
+              ...(m.calls ? { calls: m.calls } : {})
+            },
+            created_at: new Date(m.timestamp).toISOString(),
+          }))
+        }))
+        await api.syncConversations(convs)
+      } catch (e) {
+        console.warn('Failed to merge local sessions to server:', e)
+      }
+    }
+
+    // Reload from server
+    await loadSessions()
+  }
+
+  const currentSession = computed(() => sessions.value[currentSessionId.value] || null)
   const sessionList = computed(() =>
-    Object.values(sessions.value).sort((a, b) => b.updatedAt - a.updatedAt)
+    Object.values(sessions.value)
+      .filter(s => !s.isEmpty)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
   )
+
+  // Load backend session mapping
+  const savedBackendSessions = localStorage.getItem('arknights_rag_backend_sessions')
+  if (savedBackendSessions) {
+    try {
+      backendSessionIds.value = JSON.parse(savedBackendSessions)
+    } catch (e) {
+      backendSessionIds.value = {}
+    }
+  }
 
   loadSessions()
 
@@ -178,12 +342,17 @@ export const useSessionStore = defineStore('sessions', () => {
     currentSessionId,
     currentSession,
     sessionList,
+    backendSessionIds,
     createNewSession,
     deleteSession,
     switchSession,
     renameSession,
     addMessage,
-    setLastResult,
-    saveSessions
+    addToolCallMessage,
+    updateToolCallResult,
+    saveSessions,
+    getBackendSessionId,
+    loadSessions,
+    mergeLocalToServer
   }
 })

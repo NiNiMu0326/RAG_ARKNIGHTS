@@ -1,9 +1,27 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
+function _flattenEntities(entities) {
+  if (!entities) return []
+  if (typeof entities === 'object' && !Array.isArray(entities)) {
+    return Object.entries(entities).flatMap(([type, names]) =>
+      (names || []).map(name => ({ entity: name, type }))
+    )
+  }
+  return Array.isArray(entities) ? entities : []
+}
+
+function _countEntities(entities) {
+  if (!entities) return 0
+  if (typeof entities === 'object' && !Array.isArray(entities)) {
+    return Object.values(entities).reduce((sum, arr) => sum + (arr?.length || 0), 0)
+  }
+  return Array.isArray(entities) ? entities.length : 0
+}
+
 export const useGraphStore = defineStore('graph', () => {
   // State - using array instead of Set for proper reactivity
-  const graphData = ref({ entities: [], relations: [] })
+  const graphData = ref({ entities: {}, relations: [] })
   const selectedNodes = ref([])
   const selectedEdge = ref(null)
   const searchQuery = ref('')
@@ -18,8 +36,12 @@ export const useGraphStore = defineStore('graph', () => {
 
   // Computed
   const entityTypes = computed(() => {
+    const entities = graphData.value.entities
+    if (typeof entities === 'object' && !Array.isArray(entities)) {
+      return Object.keys(entities)
+    }
     const types = new Set()
-    graphData.value.entities.forEach(e => types.add(e.type || 'default'))
+    ;(Array.isArray(entities) ? entities : []).forEach(e => types.add(e.type || 'default'))
     return Array.from(types)
   })
 
@@ -63,7 +85,7 @@ export const useGraphStore = defineStore('graph', () => {
       return
     }
     const q = query.toLowerCase()
-    searchResults.value = graphData.value.entities
+    searchResults.value = _flattenEntities(graphData.value.entities)
       .filter(e => e.entity.toLowerCase().includes(q))
       .slice(0, 20)
   }
@@ -91,7 +113,7 @@ export const useGraphStore = defineStore('graph', () => {
   function onSearchFocus() {
     searchFocused.value = true
     if (!searchQuery.value.trim()) {
-      searchResults.value = graphData.value.entities.slice(0, 50)
+      searchResults.value = _flattenEntities(graphData.value.entities).slice(0, 50)
     }
   }
 

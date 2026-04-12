@@ -1,33 +1,152 @@
 import json
 import os
+import re
 from pathlib import Path
 from typing import List, Dict, Set
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from backend.api.siliconflow import SiliconFlowClient
 
-def _build_prompt(multi_doc_content: str, known_relation_types: List[str]) -> str:
-    """Build extraction prompt with cumulative known relation types."""
+
+def _extract_key_sections(content: str) -> tuple:
+    """Extract key sections from story content: 关键人物 + 角色剧情概括"""
+    lines = content.split('\n')
+
+    # 找到关键人物和角色剧情概括的起始位置
+    key_persons_idx = -1
+    char_summary_idx = -1
+
+    for i, line in enumerate(lines):
+        if '## 关键人物' in line:
+            key_persons_idx = i
+        elif '## 角色剧情概括' in line or '## 角色剧情概述' in line:
+            char_summary_idx = i
+            break
+
+    # 提取关键人物
+    key_section = ""
+    if key_persons_idx >= 0:
+        # 找到下一个 ## 标题或文件结束
+        for i in range(key_persons_idx + 1, len(lines)):
+            if lines[i].startswith('## '):
+                break
+            key_section += lines[i] + '\n'
+
+    # 提取角色剧情概括
+    summary_section = ""
+    if char_summary_idx >= 0:
+        for i in range(char_summary_idx + 1, len(lines)):
+            if lines[i].startswith('## '):
+                break
+            summary_section += lines[i] + '\n'
+
+    return key_section.strip(), summary_section.strip()
+
+
+def _parse_key_persons(key_section: str) -> List[str]:
+    """Parse key persons from key section - split by ; and clean"""
+    if not key_section:
+        return []
+
+    # 移除 "关键人物：" 前缀
+    key_section = key_section.replace('关键人物：', '').replace('关键人物:', '').strip()
+
+    # 按 ; 分割
+    persons = [p.strip() for p in key_section.split(';')]
+
+    # 清理和过滤
+    result = []
+    for p in persons:
+        # 移除空白和括号内容
+        p = re.sub(r'\s*\(.*?\)', '', p).strip()
+
+        # 过滤掉不合格的干员名
+        if not p or len(p) <= 1:
+            continue
+        # 排除包含"的"的名字（如"能天使的姐姐"）
+        if '的' in p:
+            continue
+        # 排除过长的名字（可能是描述）
+        if len(p) > 15:
+            continue
+        # 排除明显是描述而非名字的
+        if p.startswith('可疑的') or p.startswith('最后的') or p.startswith('沉默的') or p.startswith('好事的神明') or p.startswith('久违的神明') or p.startswith('沉稳的') or p.startswith('温和的') or p.startswith('激动的') or p.startswith('毛茸茸的'):
+            continue
+        # 排除包含特殊字符的
+        if any(c in p for c in '[]{}()""'):
+            continue
+
+        result.append(p)
+
+    return result
+
+
+def _build_prompt(multi_doc_content: str, known_relation_types: List[str], known_operators: List[str] = None) -> str:
+    """Build extraction prompt with cumulative known relation types and known operators."""
+    # 已知关系类型
     if known_relation_types:
         type_list = ", ".join(f'"{t}"' for t in known_relation_types)
         type_hint = f"\n\n已知关系类型（优先复用，确有必要才创建新类型）：[{type_list}]"
     else:
         type_hint = "\n\n（暂无已知关系类型，请根据文档内容抽取）"
 
-    return f"""你是一个明日方舟干员实体关系抽取专家。请从以下多个文档中分别抽取干员实体和关系。
+    # 已知干员列表
+    if known_operators:
+        operators_list = ", ".join(known_operators[:100])  # 限制前100个
+        if len(known_operators) > 100:
+            operators_list += f" ... 等共{len(known_operators)}个干员"
+        operators_hint = f"\n\n已知干员（这些是已识别为干员的实体，抽取关系时可引用，但不要在entities中重复提取）：[{operators_list}]"
+    else:
+        operators_hint = ""
 
-{type_hint}
+    return f"""你是一个明日方舟实体关系抽取专家。请从以下多个文档中分别抽取实体和关系。
+
+{type_hint}{operators_hint}
+
+实体类型（必须标注）：
+- 干员：游戏中的干员角色（如银灰、凯尔希、阿米娅）—— 不要重复提取，已知干员列表中的不要在entities中重复出现
+- 组织：组织、阵营、团体（如罗德岛、喀兰贸易、整合运动）
+- 地点：地名、城市、区域（如龙门、哥伦比亚、汐斯卡）
+- 事件：剧情事件、战争、活动（如巴别塔事件、维多利亚内战）
+
+关系类型（优先复用已知类型，确有必要才创建新类型）：
+- 所属：仅限组织/阵营/团队/企业/国家归属关系（如"银灰"→"喀兰贸易"，"所属"；"博士"→"罗德岛"，"所属"；"阿米娅"→"罗德岛"，"所属"；"陈"→"龙门近卫局"，"所属"）
+  ⚠️ 严禁将血缘、师徒、朋友、情感等个人关系标记为"所属"！
+- 亲属：血缘/家族/婚姻关系（如"崖心"→"角峰"，"亲属"；"初雪"→"崖心"，"亲属"；"苇草"→"爱布拉娜"，"亲属"）
+- 师徒：师徒/导师关系（如"凯尔希"→"阿米娅"，"师徒"；"赫德雷"→"W"，"师徒"）
+- 战友：曾经并肩作战的战友（如"银灰"→"陈"，"战友"；"塔露拉"→"爱国者"，"战友"）
+- 朋友：朋友/密友关系（如"德克萨斯"→"能天使"，"朋友"；"空"→"可颂"，"朋友"）
+- 合作：共同行动、临时合作的关系（如"赫拉格"→"博士"，"合作"；"老鲤"→"梁洵"，"合作"）
+- 对立：敌对关系（如"凯尔希"→"特雷西斯"，"对立"；"塔露拉"→"陈"，"对立"）
+- 上级：明确的上下级/指挥关系（如"阿米娅"→"博士"，"上级"；"特雷西斯"→"塔露拉"，"上级"）
+- 地区：干员与地点的关联（如"银灰"→"维多利亚"，"地区"；"崖心"→"谢拉格"，"地区"）
+- 注意：禁止创建"地点"、"事件"、"关系"、"目的地"作为关系类型，这些应该用已有的类型或忽略
+- 注意：如果关系描述中出现了"关心"、"思念"、"照顾"等情感词，请使用"朋友"或"合作"类型，不要用"所属"或"剧情"
+
+重要：干员之间的关系非常重要！请准确使用细分类型：
+- 血缘/兄妹/姐弟/父女/母子 → 亲属（不是"所属"！不是"剧情"！）
+- 师傅/徒弟/导师 → 师徒（不是"所属"！）
+- 同事/战友 → 所属（仅限明确同组织）或 战友
+- 同一组织成员（如"银灰"→"恩希欧迪斯"，"所属"）
+- 关心/思念/照顾等情感 → 朋友 或 合作（不是"所属"！）
 
 直接输出JSON对象（键为文件名），不要任何其他内容。
 
 输出格式：
 {{
   "filename1.md": {{
-    "entities": [{{"entity": "干员名", "type": "干员"}}],
-    "relations": [{{"source": "干员A", "target": "干员B", "relation": "关系", "description": "描述"}}]
+    "entities": [
+      {{"entity": "喀兰贸易", "type": "组织"}},
+      {{"entity": "维多利亚", "type": "地点"}}
+      // 注意：干员实体不要在这里重复提取，已知干员列表中的已在代码中处理
+    ],
+    "relations": [
+      {{"source": "银灰", "target": "喀兰贸易", "relation": "所属", "description": "银灰是喀兰贸易的董事长"}},
+      {{"source": "银灰", "target": "维多利亚", "relation": "地区", "description": "银灰常驻于维多利亚"}}
+    ]
   }},
   "filename2.md": {{
-    "entities": [{{"entity": "干员名", "type": "干员"}}],
+    "entities": [],
     "relations": []
   }}
 }}
@@ -37,16 +156,18 @@ def _build_prompt(multi_doc_content: str, known_relation_types: List[str]) -> st
 
 要求：
 - 每个文件分别抽取实体和关系
-- 只抽取真实存在于文档中的关系
-- 关系类型优先复用已知类型，确有必要才创建新类型（最多创建1-2个）
+- 实体只提取非干员类型（组织、地点、事件），不要重复提取已知干员
+- 关系可以涉及任何实体（干员、组织、地点、事件）
+- 关系类型优先复用已知类型
 - 实体名只输出简洁核心名称（如"银灰"），不要头衔、职位、Markdown格式
 - 禁止实体名中出现以下字符：[ ] {{ }} ( ) 《 》 或完整文件路径
 - relations数组可以为空
 """
 
+
 class EntityExtractor:
-    # Use fast model for entity extraction (offline batch job)
-    EXTRACTION_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+    # Use Qwen3 for better JSON output
+    EXTRACTION_MODEL = "Qwen/Qwen3-32B"
     # Docs per API call
     BATCH_SIZE = 10
     # Chars per document in batch mode
@@ -97,37 +218,77 @@ class EntityExtractor:
             })
         return results
 
-    def extract_batch(self, filepaths: List[str], known_relation_types: List[str] = None) -> tuple:
+    def extract_batch(self, filepaths: List[str], known_relation_types: List[str] = None,
+                      known_operators: List[str] = None, extract_key_sections: bool = False) -> tuple:
         """Extract entities from multiple files in one API call.
 
+        Args:
+            filepaths: List of file paths to extract from
+            known_relation_types: Known relation types to reuse
+            known_operators: Known operator names to avoid duplicate extraction
+            extract_key_sections: If True, parse key persons with code + extract relations with LLM
+
         Returns:
-            (results, discovered_relation_types) where discovered_relation_types
-            are new types found in this batch not in known_relation_types.
+            (results, discovered_relation_types, discovered_operators)
         """
         if known_relation_types is None:
             known_relation_types = []
+        if known_operators is None:
+            known_operators = []
 
         try:
             # Build multi-doc content
             doc_parts = []
             file_names = []
+            key_persons_list = []  # 存储每个文件的关键人物列表
+
             for fp in filepaths:
                 with open(fp, 'r', encoding='utf-8') as f:
                     content = f.read()
                 basename = os.path.basename(fp)
                 file_names.append(basename)
-                truncated = content[:self.MAX_CHARS_PER_DOC]
-                doc_parts.append(f"=== {basename} ===\n{truncated}")
+
+                if extract_key_sections:
+                    # 返回 (key_section, summary_section)
+                    key_section, summary_section = _extract_key_sections(content)
+                    # 用代码解析关键人物
+                    key_persons = _parse_key_persons(key_section)
+                    key_persons_list.append(key_persons)
+                    # 只把角色剧情概括给 LLM
+                    doc_parts.append(f"=== {basename} ===\n角色剧情概括：\n{summary_section}")
+                else:
+                    key_persons_list.append([])
+                    extracted = content[:self.MAX_CHARS_PER_DOC]
+                    doc_parts.append(f"=== {basename} ===\n{extracted}")
 
             multi_doc = "\n\n".join(doc_parts)
-            prompt = _build_prompt(multi_doc, known_relation_types)
+            prompt = _build_prompt(multi_doc, known_relation_types, known_operators)
 
             response = self.client.chat([
-                {"role": "system", "content": "你是一个明日方舟干员实体关系抽取专家。直接输出JSON对象，不要其他内容。"},
+                {"role": "system", "content": "你是一个明日方舟实体关系抽取专家。直接输出JSON对象，不要其他内容。"},
                 {"role": "user", "content": prompt}
             ], model=self.EXTRACTION_MODEL)
 
             results = self._parse_batch_result(response, file_names)
+
+            # 收集本批发现的新干员（从关键人物中）
+            new_operators = set()
+            for key_persons in key_persons_list:
+                for person in key_persons:
+                    if person not in known_operators:
+                        new_operators.add(person)
+
+            # 如果使用 key_sections 模式，把代码解析的关键人物合并到结果中
+            if extract_key_sections:
+                for i, result in enumerate(results):
+                    if i < len(key_persons_list):
+                        key_persons = key_persons_list[i]
+                        # 添加关键人物作为干员实体（只添加新发现的）
+                        for person in key_persons:
+                            # 检查是否已存在
+                            existing = [e for e in result.get('entities', []) if e['entity'] == person]
+                            if not existing:
+                                result['entities'].append({'entity': person, 'type': '干员'})
 
             # Collect all relation types found in this batch (including new ones)
             batch_types = set()
@@ -137,10 +298,10 @@ class EntityExtractor:
                     if rel_type:
                         batch_types.add(rel_type)
 
-            return results, list(batch_types)
+            return results, list(batch_types), list(new_operators)
 
         except Exception as e:
-            return [{'source_file': os.path.basename(fp), 'entities': [], 'relations': [], 'error': str(e)} for fp in filepaths], []
+            return [{'source_file': os.path.basename(fp), 'entities': [], 'relations': [], 'error': str(e)} for fp in filepaths], [], []
 
     def extract_from_text(self, text: str, source_file: str) -> Dict:
         """Extract entities and relations from a single document text."""
@@ -236,6 +397,7 @@ class EntityExtractor:
         all_entities = []
         all_relations = []
         known_relation_types: List[str] = []  # cumulative
+        known_operators: List[str] = []  # cumulative known operators
 
         # Process operators/
         op_files = sorted(Path(operators_dir).glob('*.md'))
@@ -243,11 +405,21 @@ class EntityExtractor:
 
         for i in range(0, len(op_files), batch_size):
             batch = op_files[i:i+batch_size]
-            results, batch_types = self.extract_batch([str(f) for f in batch], known_relation_types)
+            results, batch_types, new_ops = self.extract_batch(
+                [str(f) for f in batch],
+                known_relation_types,
+                known_operators,
+                extract_key_sections=False
+            )
 
             for result in results:
                 all_entities.extend(result.get('entities', []))
                 all_relations.extend(result.get('relations', []))
+
+            # 累积已发现的干员
+            for op in new_ops:
+                if op not in known_operators:
+                    known_operators.append(op)
 
             # Update known types: add new ones discovered this batch
             new_types = [t for t in batch_types if t not in known_relation_types]
@@ -255,14 +427,63 @@ class EntityExtractor:
                 known_relation_types.extend(new_types)
 
             processed = min(i + batch_size, len(op_files))
-            print(f"  Processed {processed}/{len(op_files)} | known relation types: {len(known_relation_types)} | new this batch: {len(new_types)}")
+            print(f"  Processed {processed}/{len(op_files)} | 干员: {len(known_operators)} | 关系类型: {len(known_relation_types)}")
 
+        # Deduplicate and save
+        return self._deduplicate_and_save(all_entities, all_relations, output_path)
+
+    def extract_all_stories(self, stories_dir: str, output_path: str, batch_size: int = None):
+        """Extract entities from story files using batch API calls.
+
+        Only extracts from 关键人物 + 角色剧情概括 sections.
+        """
+        if batch_size is None:
+            batch_size = self.BATCH_SIZE
+
+        all_entities = []
+        all_relations = []
+        known_relation_types: List[str] = []  # cumulative
+        known_operators: List[str] = []  # cumulative known operators
+
+        # Process stories/
+        story_files = sorted(Path(stories_dir).glob('*.md'))
+        print(f"Extracting from {len(story_files)} story files (batch={batch_size})...")
+
+        for i in range(0, len(story_files), batch_size):
+            batch = story_files[i:i+batch_size]
+            results, batch_types, new_operators = self.extract_batch(
+                [str(f) for f in batch],
+                known_relation_types,
+                known_operators,
+                extract_key_sections=True
+            )
+
+            for result in results:
+                all_entities.extend(result.get('entities', []))
+                all_relations.extend(result.get('relations', []))
+
+            # 累积已发现的干员
+            for op in new_operators:
+                if op not in known_operators:
+                    known_operators.append(op)
+
+            new_types = [t for t in batch_types if t not in known_relation_types]
+            if new_types:
+                known_relation_types.extend(new_types)
+
+            processed = min(i + batch_size, len(story_files))
+            print(f"  Processed {processed}/{len(story_files)} | 干员: {len(known_operators)} | 关系类型: {len(known_relation_types)}")
+
+        # Deduplicate and save
+        return self._deduplicate_and_save(all_entities, all_relations, output_path)
+
+    def _deduplicate_and_save(self, all_entities: List, all_relations: List, output_path: str) -> Dict:
+        """Deduplicate entities and relations, then save to file."""
         # Deduplicate
         seen_entities: Set[str] = set()
         unique_entities = []
         for e in all_entities:
             name = e['entity'].strip()
-            # Skip malformed entity names
             if not name or any(c in name for c in "[]{}()"):
                 continue
             if name not in seen_entities:
@@ -273,7 +494,6 @@ class EntityExtractor:
         unique_relations = []
         for r in all_relations:
             src, tgt, rel = r.get('source', '').strip(), r.get('target', '').strip(), r.get('relation', '').strip()
-            # Skip malformed
             if not src or not tgt or not rel:
                 continue
             if any(c in src or c in tgt for c in "[]{}()"):
@@ -293,9 +513,10 @@ class EntityExtractor:
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(result_data, f, ensure_ascii=False, indent=2)
 
-        print(f"\nDone! {len(unique_entities)} entities, {len(unique_relations)} relations, {len(known_relation_types)} relation types")
+        print(f"\nDone! {len(unique_entities)} entities, {len(unique_relations)} relations")
         print(f"Saved to {output_path}")
         return result_data
+
 
 if __name__ == "__main__":
     import sys

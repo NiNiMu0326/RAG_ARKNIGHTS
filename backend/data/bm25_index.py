@@ -1,5 +1,4 @@
 import pickle
-import os
 from typing import List
 from pathlib import Path
 from rank_bm25 import BM25Okapi
@@ -93,7 +92,7 @@ def build_collection_bm25(collection_name: str, chunks_dir: str = None) -> BM25I
     for path in chunk_paths:
         with open(path, 'r', encoding='utf-8') as f:
             corpus.append(f.read())
-        # Use path.stem as chunk_id (same as ChromaDB's chunk_id in index_manager.py)
+        # Use path.stem as chunk_id (consistent with FAISS index metadata)
         corpus_ids.append(path.stem)
 
     indexer = BM25Indexer()

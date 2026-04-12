@@ -14,7 +14,6 @@ venv/
 # Data (too large for git)
 chunks/
 faiss_index/
-chroma_db/
 backend/__pycache__/
 backend_old/
 
@@ -38,3 +37,4 @@ dist/
 
 # Docs
 docs/
+.gitnexus

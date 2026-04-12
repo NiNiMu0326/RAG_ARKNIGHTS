@@ -1,29 +1,25 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
+import { api } from '../api'
 
 export const useSettingsStore = defineStore('settings', () => {
   const theme = ref('dark')
-  const useCrag = ref(true)
-  const useGraphrag = ref(true)
-  const useParentDoc = ref(true)
+  const currentModel = ref('')
+  const availableModels = ref([])
 
   function loadSettings() {
     const saved = localStorage.getItem('arknights_rag_settings')
     if (saved) {
       const settings = JSON.parse(saved)
       theme.value = settings.theme || 'dark'
-      useCrag.value = settings.useCrag !== false
-      useGraphrag.value = settings.useGraphrag !== false
-      useParentDoc.value = settings.useParentDoc !== false
+      currentModel.value = settings.currentModel || ''
     }
   }
 
   function saveSettings() {
     localStorage.setItem('arknights_rag_settings', JSON.stringify({
       theme: theme.value,
-      useCrag: useCrag.value,
-      useGraphrag: useGraphrag.value,
-      useParentDoc: useParentDoc.value
+      currentModel: currentModel.value
     }))
   }
 
@@ -32,26 +28,20 @@ export const useSettingsStore = defineStore('settings', () => {
     saveSettings()
   }
 
-  function toggleCrag() {
-    useCrag.value = !useCrag.value
+  function setModel(modelId) {
+    currentModel.value = modelId
     saveSettings()
   }
 
-  function toggleGraphrag() {
-    useGraphrag.value = !useGraphrag.value
-    saveSettings()
-  }
-
-  function toggleParentDoc() {
-    useParentDoc.value = !useParentDoc.value
-    saveSettings()
-  }
-
-  function getRAGSettings() {
-    return {
-      use_crag: useCrag.value,
-      use_graphrag: useGraphrag.value,
-      use_parent_doc: useParentDoc.value
+  async function loadModels() {
+    try {
+      const res = await api.getModels()
+      availableModels.value = res.models || []
+      if (!currentModel.value) {
+        currentModel.value = res.default || (res.models[0]?.id ?? '')
+      }
+    } catch (e) {
+      console.warn('Failed to load models:', e)
     }
   }
 
@@ -59,14 +49,11 @@ export const useSettingsStore = defineStore('settings', () => {
 
   return {
     theme,
-    useCrag,
-    useGraphrag,
-    useParentDoc,
+    currentModel,
+    availableModels,
     toggleTheme,
-    toggleCrag,
-    toggleGraphrag,
-    toggleParentDoc,
-    getRAGSettings,
-    saveSettings
+    setModel,
+    saveSettings,
+    loadModels
   }
 })

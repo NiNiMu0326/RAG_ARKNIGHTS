@@ -49,9 +49,26 @@ export const api = {
   },
 
   async runEval() {
-    const response = await fetch(`${API_BASE}/eval`)
-    if (!response.ok) throw new Error('Evaluation failed')
-    return response.json()
+    // Use polling instead of SSE (Cloudflare Tunnel buffers SSE)
+    // 1. Start evaluation
+    const startResp = await fetch(`${API_BASE}/eval/start`, { method: 'POST' })
+    if (!startResp.ok) throw new Error('Failed to start evaluation')
+    const startData = await startResp.json()
+    if (startData.status === 'already_running') throw new Error('评估已在运行中')
+
+    // 2. Poll progress every 2s until done
+    while (true) {
+      await new Promise(r => setTimeout(r, 2000))
+      const progResp = await fetch(`${API_BASE}/eval/progress`)
+      if (!progResp.ok) continue
+      const prog = await progResp.json()
+
+      if (!prog.running) {
+        if (prog.error) throw new Error(prog.error)
+        if (prog.results) return prog.results
+        throw new Error('评估异常结束')
+      }
+    }
   }
 }
 

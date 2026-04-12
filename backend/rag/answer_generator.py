@@ -1,10 +1,27 @@
+"""
+Answer generation chain using LangChain LCEL:
+  ChatPromptTemplate | SiliconFlowChatModel | StrOutputParser
+"""
 import sys
+import time
+import logging
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from typing import List, Dict, Optional
-from backend.api.deepseek import DeepSeekClient
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-ANSWER_PROMPT_TEMPLATE = """你是一个明日方舟游戏知识问答助手。请根据以下参考资料回答用户问题。
+from typing import Dict, List, Optional
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableLambda
+from langchain_core.documents import Document
+
+from backend.lc.llm import SiliconFlowChatModel
+from backend import config
+
+logger = logging.getLogger(__name__)
+
+SYSTEM_PROMPT = "你是一个明日方舟游戏知识问答助手。请基于提供的文档回答问题，保持准确和简洁。"
+
+USER_PROMPT_TEMPLATE = """你是一个明日方舟游戏知识问答助手。请根据以下参考资料回答用户问题。
 
 ## 对话历史
 {history}
@@ -25,146 +42,126 @@ ANSWER_PROMPT_TEMPLATE = """你是一个明日方舟游戏知识问答助手。�
 ## 【网络搜索补充】（来源：网络搜索，仅作参考）
 {web_results}
 
+{graph_section}
 ## 回答
 """
 
-class AnswerGenerator:
-    def __init__(self, api_key: str = None):
-        # Use official DeepSeek API for answer generation (faster)
-        self.client = DeepSeekClient(api_key)
-        self.llm_model = config.DEEPSEEK_LLM_MODEL
-        self.api_key = api_key
 
-    def _build_prompt(
-        self,
-        question: str,
-        documents: List[Dict],
-        web_results: List[Dict] = None,
-        graph_results: Dict = None,
-        history: List[Dict] = None,
-        max_documents: int = 10
-    ) -> str:
-        """Build the prompt for answer generation.
+def _build_docs_text(documents, max_docs: int = 10) -> str:
+    docs = documents[:max_docs]
+    parts = []
+    for i, doc in enumerate(docs, 1):
+        # 处理 Document、dict 或 str 输入
+        if isinstance(doc, Document):
+            source = doc.metadata.get("source_file", doc.metadata.get("chunk_id", f"Doc {i}"))
+            score = doc.metadata.get("relevance_score", 0.0)
+            content = doc.page_content
+        elif isinstance(doc, dict):
+            source = doc.get("metadata", {}).get("source_file", doc.get("chunk_id", f"Doc {i}"))
+            score = doc.get("relevance_score", 0.0)
+            content = doc.get("content", "")
+        elif isinstance(doc, str):
+            source = f"Doc {i}"
+            score = 0.0
+            content = doc
+        else:
+            continue
 
-        Args:
-            question: User question
-            documents: List of retrieved documents
-            web_results: Optional web search results
-            graph_results: Optional GraphRAG results
-            history: Optional conversation history
-            max_documents: Maximum number of documents to include
+        score_text = f" (相关度: {score:.2f})" if score > 0 else ""
+        parts.append(f"[{i}] {source}{score_text}:\n{content}")
+    return "\n\n".join(parts) if parts else "无相关文档"
 
-        Returns:
-            Formatted prompt string
-        """
-        # Limit documents to prevent context overflow
-        documents = documents[:max_documents] if documents else []
 
-        # Build documents section (local retrieval - high priority)
-        docs_text = ""
-        for i, doc in enumerate(documents, 1):  # Use all documents
-            content = doc.get('content', '')  # No truncation - 8k context
-            source = doc.get('metadata', {}).get('source_file', doc.get('chunk_id', f'Doc {i}'))
-            score = doc.get('relevance_score', 0.0)
-            score_text = f" (相关度: {score:.2f})" if score > 0 else ""
-            docs_text += f"[{i}] {source}{score_text}:\n{content}\n\n"
+def _build_web_text(web_results: Optional[List[Dict]]) -> str:
+    if not web_results:
+        return "无"
+    parts = []
+    for i, r in enumerate(web_results, 1):
+        title = r.get("title", "Result")
+        snippet = r.get("snippet", "")
+        parts.append(f"[{i}] {title}:\n{snippet}")
+    return "\n".join(parts)
 
-        # Build web results section (web search supplement - lower priority)
-        web_text = "无"
-        if web_results:
-            web_lines = []
-            for i, r in enumerate(web_results, 1):
-                title = r.get('title', 'Result')
-                snippet = r.get('snippet', '')  # No truncation - 8k context
-                score = r.get('relevance_score', 0.0)
-                score_text = f" (相关度: {score:.2f})" if score > 0 else " (网络结果)"
-                web_lines.append(f"[{i}] {title}{score_text}:\n{snippet}")
-            web_text = "\n".join(web_lines)
 
-        # Build graph results section
-        graph_text = ""
-        if graph_results and graph_results.get('is_relation_query') and graph_results.get('results'):
-            operators = graph_results.get('detected_operators', [])
-            results = graph_results['results']
-
-            direct_relations = []
-            individual_relations = {}
-
-            for r in results:
-                op1, op2 = r.get('operator1', ''), r.get('operator2', '')
-                if op1 in operators and op2 in operators:
-                    direct_relations.append(r)
+def _build_graph_section(graph_results: Optional[Dict]) -> str:
+    if not graph_results or not graph_results.get("is_relation_query"):
+        return ""
+    results = graph_results.get("results", [])
+    if not results:
+        return ""
+    operators = graph_results.get("detected_operators", [])
+    lines = ["## 知识图谱关系"]
+    direct = [r for r in results if r.get("operator1") in operators and r.get("operator2") in operators]
+    others: Dict[str, List] = {}
+    for r in results:
+        if r not in direct:
+            op1 = r.get("operator1", "")
+            others.setdefault(op1, []).append(r)
+    if direct:
+        lines.append("【直接关系】")
+        for r in direct:
+            lines.append(f"- {r['operator1']} 与 {r['operator2']} 是{r['relation']}：{r['description']}")
+    if others:
+        lines.append("\n【各自关系】")
+        for op, rels in others.items():
+            lines.append(f"\n{op} 的关系：")
+            for r in rels:
+                desc = r.get('description', '')
+                if desc:
+                    lines.append(f"  - {r['operator2']}：{r['relation']}（{desc}）")
                 else:
-                    if op1 not in individual_relations:
-                        individual_relations[op1] = []
-                    individual_relations[op1].append(r)
+                    lines.append(f"  - {r['operator2']}：{r['relation']}")
+    return "\n".join(lines) + "\n"
 
-            graph_lines = []
-            if direct_relations:
-                graph_lines.append("【直接关系】")
-                for r in direct_relations:
-                    graph_lines.append(
-                        f"- {r['operator1']} 与 {r['operator2']} 是{r['relation']}：{r['description']}"
-                    )
 
-            if individual_relations:
-                graph_lines.append("\n【各自关系】")
-                for op, rels in individual_relations.items():
-                    graph_lines.append(f"\n{op} 的关系：")
-                    for r in rels:  # No limit - include all relations
-                        graph_lines.append(f"  - {r['operator2']}：{r['relation']}")
+def _build_history_text(history: Optional[List[Dict]]) -> str:
+    if not history:
+        return "无"
+    return "\n".join(f"{m['role']}: {m['content']}" for m in history[-5:])
 
-            graph_text = "\n## 知识图谱关系\n" + "\n".join(graph_lines) + "\n"
 
-        # Build history text
-        history_text = "无"
-        if history:
-            recent = history[-5:]
-            history_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent])
+def make_answer_chain(api_key: str = None, rerank_top_k: int = 10):
+    """Build the LCEL answer generation chain.
 
-        # Build final prompt
-        prompt = ANSWER_PROMPT_TEMPLATE.format(
-            history=history_text,
-            question=question,
-            documents=docs_text,
-            web_results=web_text
-        )
+    Input state: {..., "reranked_docs": List[Document], "web_results": ...,
+                       "graph_results": ..., "question": str, "history": list,
+                       "crag": CRAGStrategy}
+    Output state: same + {"answer": str}
+    """
+    final_api_key = api_key or config.SILICONFLOW_API_KEY
 
-        prompt += graph_text
-        return prompt
+    llm = SiliconFlowChatModel(
+        api_key=final_api_key,
+        model="Pro/Qwen/Qwen2.5-7B-Instruct",
+    )
 
-    def generate(
-        self,
-        question: str,
-        documents: List[Dict],
-        crag_level: str = 'HIGH',
-        web_results: List[Dict] = None,
-        graph_results: Dict = None,
-        history: List[Dict] = None,
-        max_documents: int = 10
-    ) -> str:
-        """Generate an answer using the LLM.
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", USER_PROMPT_TEMPLATE),
+    ])
 
-        Args:
-            question: User question
-            documents: List of retrieved documents with content
-            crag_level: CRAG level (HIGH/LOW)
-            web_results: Optional web search results
-            graph_results: Optional GraphRAG results
-            history: Optional conversation history for resolving pronouns
-            max_documents: Maximum number of documents to include
+    answer_chain_inner = prompt | llm | StrOutputParser()
 
-        Returns:
-            Generated answer string
-        """
-        prompt = self._build_prompt(question, documents, web_results, graph_results, history, max_documents)
+    def _generate(state: Dict) -> Dict:
+        t0 = time.time()
+        docs = state.get("reranked_docs", [])[:rerank_top_k]
+        question = state["question"]
+        history = state.get("history", [])
+        web_results = state.get("web_results")
+        graph_results = state.get("graph_results")
 
-        try:
-            response = self.client.chat([
-                {"role": "system", "content": "你是一个明日方舟游戏知识问答助手。请基于提供的文档回答问题，保持准确和简洁。"},
-                {"role": "user", "content": prompt}
-            ], model=self.llm_model, extra_body={"thinking": False})
-            return response.strip()
-        except Exception as e:
-            return f"生成回答时出错：{str(e)}"
+        answer = answer_chain_inner.invoke({
+            "history": _build_history_text(history),
+            "question": question,
+            "documents": _build_docs_text(docs, max_docs=rerank_top_k),
+            "web_results": _build_web_text(web_results),
+            "graph_section": _build_graph_section(graph_results),
+        })
+        elapsed = round((time.time() - t0) * 1000)
+        logger.info(f"[AnswerGen] {elapsed}ms")
+        timings = state.get("_step_timings", {})
+        timings["answer_gen"] = elapsed
+        # 保留 reranked_docs 到返回状态，供前端使用
+        return {**state, "answer": answer.strip(), "reranked_docs": docs, "_step_timings": timings}
 
+    return RunnableLambda(_generate, name="AnswerGeneration")

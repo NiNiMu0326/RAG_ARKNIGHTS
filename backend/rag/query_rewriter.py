@@ -1,9 +1,8 @@
 import sys
 import time
 from pathlib import Path
-import functools
 import json
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from typing import List, Dict, Optional, Tuple
 from backend.api.siliconflow import SiliconFlowClient
 
@@ -63,7 +62,7 @@ class QueryRewriter:
     def __init__(self, api_key: str = None):
         # Use SiliconFlow Qwen for LLM chat (fast and accurate)
         self.client = SiliconFlowClient(api_key)
-        self.llm_model = "Qwen/Qwen2.5-7B-Instruct"
+        self.llm_model = "Pro/Qwen/Qwen2.5-7B-Instruct"
 
     def _expand_aliases(self, text: str) -> str:
         """Expand known aliases in text.
@@ -374,9 +373,25 @@ class QueryRewriter:
         # Finally, use LLM for semantic understanding
         return self._rewrite_with_history(query, history)
 
-    def rewrite_queries_only(self, query: str, history: List[Dict] = None) -> List[str]:
-        """Legacy method: only return rewritten queries (for backward compatibility)."""
-        result = self.rewrite(query, history)
-        if result.get("needs_retrieval"):
-            return result.get("queries", [query])
-        return [query]
+from langchain_core.runnables import RunnableLambda
+from typing import Dict as TypingDict
+
+def make_query_rewrite_runnable(api_key: str = None) -> RunnableLambda:
+    """Create a RunnableLambda that wraps QueryRewriter.rewrite().
+    
+    Input state dict: {"question": str, "history": list, "config": dict}
+    Output state dict: same + {"rewrite": {...}}
+    """
+    rewriter = QueryRewriter(api_key=api_key)
+
+    def _rewrite(state: TypingDict) -> TypingDict:
+        t0 = time.time()
+        question = state["question"]
+        history = state.get("history", [])
+        result = rewriter.rewrite(question, history)
+        elapsed = round((time.time() - t0) * 1000)
+        timings = state.get("_step_timings", {})
+        timings["query_rewrite"] = elapsed
+        return {**state, "rewrite": result, "_step_timings": timings}
+
+    return RunnableLambda(_rewrite, name="QueryRewrite")

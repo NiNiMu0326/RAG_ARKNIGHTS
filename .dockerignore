@@ -2,30 +2,26 @@
 .git
 .gitignore
 
-# Node (frontend build)
+# Node source (we only need built dist)
 frontend/node_modules
-frontend/dist
+frontend/src
 frontend/.npm
 frontend/.vite
 
-# Python
+# Python cache
 __pycache__
-*.py[cod]
+*.pyc
+*.pyo
 *.egg-info
-.eggs
 .pytest_cache
-.mypy_cache
 
 # Virtual environments
 venv
 .venv
-env
 
 # IDE
 .vscode
 .idea
-*.swp
-*.swo
 
 # OS
 .DS_Store
@@ -33,24 +29,9 @@ Thumbs.db
 
 # Logs
 *.log
-logs/
 
-# Temporary files
-*.tmp
-*.bak
-.cache/
-
-# Test files
-**/*test*.py
-**/test_*.py
-**/__pycache__
-
-# Local development
-.env.local
-.env.development
-*.local
-
-# Performance test results
-*_results*.json
-*_summary*.csv
-performance_output.txt
+# Deployment scripts (not needed in container)
+deploy*.py
+check_server*.py
+step*.py
+docker_build*.py

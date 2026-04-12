@@ -2,7 +2,7 @@ import sys
 import warnings
 import threading
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from typing import List, Dict, Optional
 from backend.rag.graphrag.builder import GraphBuilder
 
@@ -28,7 +28,7 @@ def get_graph_builder() -> GraphBuilder:
 
 
 class GraphRAGQuery:
-    def __init__(self, api_key: str = None, graph_path: str = None):
+    def __init__(self):
         self.graph_builder = get_graph_builder()
 
     def query_with_flags(self, question: str, is_relation_query: bool, detected_operators: List[str] = None) -> Dict:

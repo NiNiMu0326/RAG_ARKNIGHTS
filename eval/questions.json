@@ -3,12 +3,43 @@
     {
       "id": 1,
       "question": "维什戴尔的技能是什么？",
-      "expected_keywords": ["技能", "维什戴尔"]
+      "expected_keywords": ["技能", "维什戴尔", "异格", "狙击"],
+      "expected_docs": ["operators_0015"],
+      "reference_answer": "维什戴尔是狙击系的异格干员，拥有特殊技能可在战场上进行战术狙击，具有高伤害输出能力。"
     },
     {
       "id": 2,
       "question": "博士和阿米娅的关系？",
-      "expected_keywords": ["博士", "阿米娅", "关系"]
+      "expected_keywords": ["博士", "阿米娅", "关系", "罗德岛", "信任"],
+      "expected_docs": ["stories_"],
+      "reference_answer": "博士是罗德岛的战术指挥官，阿米娅是罗德岛的领袖之一，两人是密切的合作伙伴，共同带领罗德岛对抗整合运动。"
+    },
+    {
+      "id": 3,
+      "question": "银灰的模组是什么？",
+      "expected_keywords": ["银灰", "模组", "决战者", "狐火"],
+      "expected_docs": ["operators_0029"],
+      "reference_answer": "银灰的模组是决战者模组-X/Ys，开启后能增强其战术支援能力，狐火天赋效果获得提升。"
+    },
+    {
+      "id": 4,
+      "question": "凯尔希医生是谁？",
+      "expected_keywords": ["凯尔希", "医生", "罗德岛", "医疗"],
+      "expected_docs": ["operators_0017"],
+      "reference_answer": "凯尔希是罗德岛的医疗总监，拥有极高的医学和源石技艺造诣，是博士的重要顾问和盟友。"
+    },
+    {
+      "id": 5,
+      "question": "年是什么干员？",
+      "expected_keywords": ["年", "特种", "生肖", "萨卡兹"],
+      "expected_docs": ["operators_0043"],
+      "reference_answer": "年是六星特种干员，萨卡兹族，是企鹅物流的赞助人之一，以其独特的生肖系列皮肤闻名。"
     }
+  ],
+  "categories": [
+    "干员信息",
+    "剧情关系",
+    "游戏机制",
+    "角色背景"
   ]
 }

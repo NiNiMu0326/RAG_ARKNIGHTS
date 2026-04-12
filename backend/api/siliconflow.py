@@ -3,14 +3,17 @@ SiliconFlow API client for LLM, embedding, reranking, and web search.
 Uses Tavily for internet search (SiliconFlow internet search API is deprecated).
 """
 
-import time
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from typing import List, Dict, Any
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-import config
+from backend import config
 
 
 class SiliconFlowClient:
@@ -117,7 +120,7 @@ class SiliconFlowClient:
 
     def search(self, query: str, limit: int = 10) -> List[Dict[str, str]]:
         """
-        Perform web search using Tavily internet search.
+        Perform web search. Tries Tavily first, falls back to DuckDuckGo Lite.
 
         Args:
             query: Search query string.
@@ -126,47 +129,95 @@ class SiliconFlowClient:
         Returns:
             List of search result dicts with "title", "url", and "snippet" keys.
         """
-        if not self.tavily_api_key:
-            raise ValueError("Tavily API key must be provided for web search. Set TAVILY_API_KEY in config or environment.")
+        # Try Tavily first
+        if self.tavily_api_key:
+            try:
+                return self._search_tavily(query, limit)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Tavily search failed: {e}, falling back to DuckDuckGo")
 
+        # Fallback to DuckDuckGo Lite (no API key needed)
+        return self._search_duckduckgo(query, limit)
+
+    def _search_tavily(self, query: str, limit: int) -> List[Dict[str, str]]:
+        """Search using Tavily API."""
         url = "https://api.tavily.com/search"
-
-        headers = {
-            "Content-Type": "application/json"
-        }
-
+        headers = {"Content-Type": "application/json"}
         payload = {
             "api_key": self.tavily_api_key,
             "query": query,
             "search_depth": "basic",
             "max_results": limit
         }
-
-        response = self._session.post(url, headers=headers, json=payload, timeout=120)
+        response = self._session.post(url, headers=headers, json=payload, timeout=30)
         response.raise_for_status()
-
-        try:
-            result = response.json()
-        except ValueError:
-            raise Exception(f"Invalid JSON response from {url}: {response.text[:200]}")
-
-        # Transform Tavily response to match expected format
+        result = response.json()
         tavily_results = result.get("results", [])
-        # Limit results to the specified limit
-        limited_results = tavily_results[:limit]
         return [
-            {
-                "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "snippet": r.get("content", "")
-            }
-            for r in limited_results
+            {"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("content", "")}
+            for r in tavily_results[:limit]
         ]
+
+    def _search_duckduckgo(self, query: str, limit: int) -> List[Dict[str, str]]:
+        """Search using DuckDuckGo Lite HTML (no API key needed, free)."""
+        import re
+        import logging
+        logger = logging.getLogger(__name__)
+
+        url = "https://lite.duckduckgo.com/lite/"
+        # GET the search form first to get a token
+        try:
+            resp = self._session.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            # Extract vqd token from the page
+            vqd_match = re.search(r'name="vqd"\s+value="([^"]+)"', resp.text)
+            if not vqd_match:
+                vqd_match = re.search(r'vqd=([^&"]+)', resp.text)
+            vqd = vqd_match.group(1) if vqd_match else ""
+
+            # POST the search query
+            data = {"q": query, "vqd": vqd, "kl": "wt-wt", "l": "wt-wt"}
+            resp = self._session.post(url, data=data, timeout=15,
+                                       headers={"User-Agent": "Mozilla/5.0"})
+            html = resp.text
+
+            # Parse results from the HTML table
+            results = []
+            # Each result is in a <tr class="result-link"> followed by a <tr class="result-snippet">
+            result_blocks = re.findall(
+                r'<a[^>]+class="result-link"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
+                r'<td[^>]*class="result-snippet"[^>]*>(.*?)</td>',
+                html, re.DOTALL
+            )
+            for href, title_html, snippet_html in result_blocks[:limit]:
+                title = re.sub(r'<[^>]+>', '', title_html).strip()
+                snippet = re.sub(r'<[^>]+>', '', snippet_html).strip()
+                if title and snippet:
+                    results.append({
+                        "title": title,
+                        "url": href,
+                        "snippet": snippet,
+                    })
+
+            if not results:
+                # Fallback: parse any links from the page
+                links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>(.*?)</a>', html, re.DOTALL)
+                for href, title_html in links[:limit]:
+                    title = re.sub(r'<[^>]+>', '', title_html).strip()
+                    if title and len(title) > 5 and 'duckduckgo' not in href.lower():
+                        results.append({"title": title, "url": href, "snippet": ""})
+
+            logger.info(f"[DuckDuckGo] got {len(results)} results for: {query}")
+            return results[:limit]
+
+        except Exception as e:
+            logger.warning(f"DuckDuckGo search failed: {e}")
+            return []
 
     def chat(self, messages: List[Dict[str, str]], model: str = None,
              temperature: float = 0.7, **kwargs) -> str:
         """Send chat completion request via SiliconFlow."""
-        model = model or "Qwen/Qwen2.5-7B-Instruct"
+        model = model or "Pro/Qwen/Qwen2.5-7B-Instruct"
         url = f"{self.base_url}/chat/completions"
 
         headers = {

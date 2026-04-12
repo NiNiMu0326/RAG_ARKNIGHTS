@@ -11,15 +11,15 @@
     </div>
 
     <nav class="sidebar-nav">
-      <router-link to="/chat" class="nav-item" :class="{ active: $route.path === '/chat' }">
+      <router-link to="/chat" class="nav-item" :class="{ active: $route.path === '/chat' }" @click="closeMobileMenu">
         <span class="nav-icon">Q</span>
         <span class="nav-text">问答助手</span>
       </router-link>
-      <router-link to="/admin" class="nav-item" :class="{ active: $route.path === '/admin' }">
+      <router-link to="/admin" class="nav-item" :class="{ active: $route.path === '/admin' }" @click="closeMobileMenu">
         <span class="nav-icon">G</span>
         <span class="nav-text">管理后台</span>
       </router-link>
-      <router-link to="/graph" class="nav-item" :class="{ active: $route.path === '/graph' }">
+      <router-link to="/graph" class="nav-item" :class="{ active: $route.path === '/graph' }" @click="closeMobileMenu">
         <span class="nav-icon">N</span>
         <span class="nav-text">知识图谱</span>
       </router-link>
@@ -96,7 +96,7 @@
           <span class="nav-icon">S</span>
           <span class="nav-text">会话管理</span>
         </span>
-        <span class="session-manager-toggle">▶</span>
+        <span class="session-manager-toggle">▼</span>
       </div>
       <div class="session-manager-body">
         <div class="sidebar-session-list">
@@ -167,12 +167,25 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSessionStore } from '../stores/sessions'
+import { useAuthStore } from '../stores/auth'
 import { useGraphController } from '../composables/useGraphController'
+import { isEntitiesEmpty } from '../composables/useGraphController'
 import { formatTime } from '../api'
 
 const route = useRoute()
 const sessionStore = useSessionStore()
+const authStore = useAuthStore()
 const gc = useGraphController()
+
+function closeMobileMenu() {
+  document.querySelector('.sidebar')?.classList.remove('mobile-open')
+  document.querySelector('.mobile-overlay')?.classList.remove('active')
+}
+
+// Auto-close mobile sidebar on route change
+watch(() => route.path, () => {
+  closeMobileMenu()
+})
 
 const sessionExpanded = ref(true)
 const showRenameModal = ref(false)
@@ -190,7 +203,7 @@ const showGraphControls = computed(() => route.path === '/graph')
 
 // Load graph data when graph page is shown
 watch(showGraphControls, (show) => {
-  if (show && gc.graphData.value.entities.length === 0) {
+  if (show && isEntitiesEmpty(gc.graphData.value.entities)) {
     gc.loadGraphData()
   }
   if (show) {
@@ -209,9 +222,17 @@ watch(() => sessionStore.currentSessionId, () => {
 
 onMounted(() => {
   // Load data if on graph page and data not loaded
-  if (showGraphControls.value && gc.graphData.value.entities.length === 0) {
+  if (showGraphControls.value && isEntitiesEmpty(gc.graphData.value.entities)) {
     gc.loadGraphData()
   }
+  // Listen for auth changes to sync sessions
+  window.addEventListener('auth-changed', async () => {
+    if (authStore.isLoggedIn) {
+      await sessionStore.mergeLocalToServer()
+    } else {
+      await sessionStore.loadSessions()
+    }
+  })
 })
 
 function promptRename(sessionId) {
