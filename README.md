@@ -5,6 +5,8 @@
 ## 功能特性
 
 - **AgenticRAG**：DeepSeek-chat Function Calling 自主决定检索路径
+- **用户认证系统**：注册、登录、JWT 令牌认证
+- **会话持久化**：SQLite 数据库存储用户对话历史
 - **并行工具调用**：Agent 可同时发起多个工具调用，提升效率
 - **SSE 流式输出**：实时显示 Agent 思考过程和工具执行状态
 - **知识库检索**：FAISS 向量 + BM25 混合检索 + Cross-Encoder 重排

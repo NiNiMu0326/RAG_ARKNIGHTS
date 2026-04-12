@@ -61,7 +61,7 @@ class RAGOrchestrator:
         self._bm25_loaded = True
         for name in ["operators", "stories", "knowledge"]:
             try:
-                path = str(Path(__file__).parent.parent.parent / "chunks") + f"/{name}_bm25.pkl"
+                path = config.get_bm25_index_path(name)
                 self._bm25_indexes[name] = BM25Indexer.load(path)
             except FileNotFoundError:
                 warnings.warn(f"BM25 index not found for '{name}' collection.")

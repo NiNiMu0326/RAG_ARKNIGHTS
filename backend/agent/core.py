@@ -12,7 +12,7 @@ from typing import AsyncGenerator, Dict, List, Any, Optional
 from backend.agent.sessions import Session, SessionManager
 from backend.agent.prompts import build_messages
 from backend.agent.tools import ToolRegistry, get_tool_registry
-from backend.api.deepseek import DeepSeekClient, ChatResponse, ToolCall
+from backend.api.deepseek import DeepSeekClient, ChatResponse, ToolCall, STREAM_EVENT_THINKING_DELTA, STREAM_EVENT_CONTENT_DELTA, STREAM_EVENT_TOOL_CALLS, STREAM_EVENT_DONE
 from backend.api.llm_factory import get_llm_client, get_model_info, DEFAULT_MODEL
 from backend import config
 
@@ -54,7 +54,23 @@ def format_tool_call_result(tool_call_id: str, result: Any, time_ms: float = 0, 
             summary = result.get("message", "未找到结果")
         elif result.get("mode") == "path":
             path = result.get("path", [])
-            summary = f"路径: {' → '.join(path)}" if path else "无路径"
+            edges = result.get("edges", [])
+            if path:
+                # Build detailed path summary with edge relations
+                if edges:
+                    edge_strs = []
+                    for e in edges:
+                        rel = e.get("relation", "")
+                        desc = e.get("description", "")
+                        if desc:
+                            edge_strs.append(f"{e.get('from','')}--{rel}-->{e.get('to','')} ({desc})")
+                        else:
+                            edge_strs.append(f"{e.get('from','')}--{rel}-->{e.get('to','')}")
+                    summary = f"路径: {' → '.join(path)} | 边: {'; '.join(edge_strs)}"
+                else:
+                    summary = f"路径: {' → '.join(path)}"
+            else:
+                summary = "无路径"
         elif result.get("mode") == "neighbors":
             neighbors = result.get("neighbors", [])
             summary = f"找到 {len(neighbors)} 个关联实体"
@@ -74,6 +90,16 @@ def format_tool_call_result(tool_call_id: str, result: Any, time_ms: float = 0, 
     return f"data: {data}\n\n"
 
 
+def format_tool_executing(tool_call_id: str, tool_name: str) -> str:
+    """Format tool_executing SSE event — sent when a tool starts executing."""
+    data = json.dumps({
+        "type": "tool_executing",
+        "tool_call_id": tool_call_id,
+        "tool_name": tool_name,
+    }, ensure_ascii=False)
+    return f"data: {data}\n\n"
+
+
 def format_answer_delta(delta: str) -> str:
     """Format answer_delta SSE event (streaming token)."""
     data = json.dumps({
@@ -88,6 +114,16 @@ def format_thinking_delta(content: str) -> str:
     data = json.dumps({
         "type": "thinking_delta",
         "content": content,
+    }, ensure_ascii=False)
+    return f"data: {data}\n\n"
+
+
+def format_thinking_start(round_num: int = 1, timestamp_ms: float = 0) -> str:
+    """Format thinking_start SSE event — sent at the beginning of each LLM call."""
+    data = json.dumps({
+        "type": "thinking_start",
+        "round": round_num,
+        "timestamp_ms": timestamp_ms,
     }, ensure_ascii=False)
     return f"data: {data}\n\n"
 
@@ -113,25 +149,28 @@ def format_error(error_msg: str) -> str:
 
 # ===== Loop Detection =====
 
-def detect_loop(messages: List[Dict], window: int = 4) -> bool:
+def detect_loop(messages: List[Dict], window: int = 3) -> bool:
     """Detect if the agent is stuck in a loop of repeated identical tool_calls.
     
-    Compares tool_call function name + arguments over the last N calls.
+    Checks at the message level (per-round), comparing the full set of tool_calls
+    in each assistant message. A loop is detected when `window` consecutive rounds
+    produce identical tool_call sets (same function names + arguments).
     """
-    recent_calls = []
+    recent_rounds = []
     for msg in reversed(messages):
         if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            # Build a sorted, deterministic key for this round's tool_calls
+            round_keys = []
             for tc in msg["tool_calls"]:
                 fn = tc.get("function", {})
-                key = f"{fn.get('name', '')}:{fn.get('arguments', '')}"
-                recent_calls.append(key)
-                if len(recent_calls) >= window:
-                    break
-        if len(recent_calls) >= window:
-            break
+                round_keys.append(f"{fn.get('name', '')}:{fn.get('arguments', '')}")
+            round_keys.sort()
+            recent_rounds.append(tuple(round_keys))
+            if len(recent_rounds) >= window:
+                break
 
-    # If all recent calls are identical, it's a loop
-    return len(recent_calls) >= window and len(set(recent_calls)) == 1
+    # If all recent rounds are identical, it's a loop
+    return len(recent_rounds) >= window and len(set(recent_rounds)) == 1
 
 
 # ===== Tool Execution =====
@@ -203,53 +242,77 @@ async def agent_loop(
             yield format_error("我在查找信息时陷入了循环，无法完成回答。请尝试更具体的问题。")
             return
 
-        # Call LLM with tools
+        # Call LLM with tools (streaming)
         try:
             logger.info(f"[LLM CALL] Round {round_num}: Sending {len(messages)} messages to {model_info['display_name']}")
-            response = client.chat_with_tools(
+            yield format_thinking_start(round_num, timestamp_ms=time.time() * 1000)
+            # Force flush: ensure thinking_start reaches the client immediately
+            await asyncio.sleep(0)
+
+            # Collect streaming response
+            tool_calls = None
+            final_content = ""
+            final_reasoning = ""
+            stream = client.chat_with_tools_stream(
                 messages=messages,
                 tools=tool_schemas,
                 temperature=0.3,
             )
-            logger.info(f"[LLM RESPONSE] Round {round_num}: content_len={len(response.content or '')} tool_calls={len(response.tool_calls) if response.tool_calls else 0} finish_reason={response.finish_reason}")
+            async for event in stream:
+                etype = event["type"]
+
+                if etype == STREAM_EVENT_THINKING_DELTA:
+                    # Stream reasoning content to frontend immediately
+                    yield format_thinking_delta(event["content"])
+
+                elif etype == STREAM_EVENT_CONTENT_DELTA:
+                    # Stream answer content to frontend immediately
+                    yield format_answer_delta(event["delta"])
+
+                elif etype == STREAM_EVENT_TOOL_CALLS:
+                    # Model decided to use tools
+                    tool_calls = event["tool_calls"]
+                    final_content = event.get("content", "")
+                    final_reasoning = event.get("reasoning_content", "")
+
+                elif etype == STREAM_EVENT_DONE:
+                    # Model answered directly without tools
+                    final_content = event.get("content", "")
+                    final_reasoning = event.get("reasoning_content", "")
+
+            logger.info(f"[LLM RESPONSE] Round {round_num}: content_len={len(final_content)} tool_calls={len(tool_calls) if tool_calls else 0}")
         except Exception as e:
             logger.error(f"[LLM ERROR] {model_info['display_name']} API call failed: {e}", exc_info=True)
             yield format_error(f"AI 服务暂时不可用: {str(e)}")
             return
 
         # Check if model wants to use tools
-        if not response.has_tool_calls:
-            # Model decided to answer directly
-            content = response.content
-            session.add_message("assistant", content)
+        if not tool_calls:
+            # Model decided to answer directly — content was already streamed
+            session.add_message("assistant", final_content)
 
-            # Send thinking content if present
-            if response.reasoning_content:
-                yield format_thinking_delta(response.reasoning_content)
-
-            # Stream the answer as a single chunk
-            yield format_answer_delta(content)
             total_ms = round((time.time() - loop_start) * 1000)
-            logger.info(f"[ANSWER] session={session_id} rounds={round_num - 1} total_time={total_ms}ms content_len={len(content)}")
-            yield format_answer_done(content, metrics={
+            logger.info(f"[ANSWER] session={session_id} rounds={round_num - 1} total_time={total_ms}ms content_len={len(final_content)}")
+            yield format_answer_done(final_content, metrics={
                 "total_time_ms": total_ms,
                 "num_tool_rounds": round_num - 1,
             })
             return
 
         # Model returned tool_calls → execute in parallel
-        tool_calls = response.tool_calls
         tool_names = [tc.name for tc in tool_calls]
         logger.info(f"[TOOL CALLS] Round {round_num}: {len(tool_calls)} calls: {tool_names}")
 
         # Record assistant's tool_calls message (strips reasoning_content for API safety)
         session.add_assistant_tool_calls(
-            tool_calls, content=response.content,
-            reasoning_content=response.reasoning_content,
+            tool_calls, content=final_content,
+            reasoning_content=final_reasoning,
         )
 
         # Notify frontend about tool calls
         yield format_tool_calls_start(tool_calls, round_num)
+        # Force flush: yield control to allow SSE event to be sent immediately
+        await asyncio.sleep(0)
 
         # Execute all tool_calls in parallel, each with individual timing
         async def _execute_with_timing(tc: ToolCall):
@@ -258,6 +321,12 @@ async def agent_loop(
             result = await execute_tool(registry, tc)
             elapsed = (time.time() - start) * 1000
             return result, elapsed
+
+        # Notify frontend that tools are starting execution
+        for tc in tool_calls:
+            yield format_tool_executing(tc.id, tc.name)
+        # Force flush: ensure tool_executing events reach the client before tool execution
+        await asyncio.sleep(0)
 
         timed_results = await asyncio.gather(
             *[_execute_with_timing(tc) for tc in tool_calls]

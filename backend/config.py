@@ -43,6 +43,15 @@ VECTOR_WEIGHT = 0.5
 FAISS_INDEX_DIR = BASE_DIR / "faiss_index"
 FAISS_INDEX_DIR_STR = str(FAISS_INDEX_DIR)
 
+
+def get_bm25_index_path(collection_name: str) -> str:
+    """Get the BM25 index pickle path for a given collection.
+
+    Args:
+        collection_name: One of 'operators', 'stories', 'knowledge'.
+    """
+    return str(CHUNKS_DIR / f"{collection_name}_bm25.pkl")
+
 # LangSmith (activated via environment variables, no code needed):
 # Set in .env:
 #   LANGCHAIN_TRACING_V2=true

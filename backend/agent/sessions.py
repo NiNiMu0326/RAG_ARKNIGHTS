@@ -75,12 +75,66 @@ class Session:
         
         Strips any non-standard fields (prefixed with _) before sending to the API
         to prevent 400 errors from unsupported fields like reasoning_content.
+        
+        Keeps original tool_call_ids intact — providers like MiniMax require the
+        exact IDs they generated in previous turns to match tool results.
+        
+        Handles orphaned tool_calls/tool_results that may occur when a streaming
+        request is interrupted mid-way (e.g. client aborts while tools are executing).
         """
         messages = self.messages[-max_turns:]
+        
+        # ===== Pre-pass: identify valid tool_call IDs =====
+        # Collect all tool_call IDs from assistant messages
+        # and all tool_call_ids from tool result messages.
+        assistant_tc_ids = set()
+        for msg in messages:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    if tc.get("id"):
+                        assistant_tc_ids.add(tc["id"])
+        
+        result_tc_ids = set()
+        for msg in messages:
+            if msg.get("role") == "tool" and msg.get("tool_call_id"):
+                result_tc_ids.add(msg["tool_call_id"])
+        
+        # Find orphaned IDs (exist in one side but not the other)
+        orphan_assistant_ids = assistant_tc_ids - result_tc_ids
+        orphan_result_ids = result_tc_ids - assistant_tc_ids
+        
+        if orphan_assistant_ids or orphan_result_ids:
+            logger.warning(
+                f"[SESSION] Orphaned tool IDs detected: "
+                f"assistant_without_result={orphan_assistant_ids}, "
+                f"result_without_assistant={orphan_result_ids}. "
+                f"Cleaning up (likely from interrupted request)."
+            )
+        
+        # ===== Clean pass: remove orphaned entries, keep original IDs =====
         clean = []
         for msg in messages:
             clean_msg = {k: v for k, v in msg.items() if not k.startswith("_")}
+            
+            if clean_msg.get("role") == "assistant" and clean_msg.get("tool_calls"):
+                # Filter out orphaned tool_calls
+                remaining_tcs = [
+                    tc for tc in clean_msg["tool_calls"]
+                    if tc.get("id", "") not in orphan_assistant_ids
+                ]
+                if remaining_tcs:
+                    clean_msg["tool_calls"] = remaining_tcs
+                else:
+                    # All tool_calls were orphaned — downgrade to plain assistant message
+                    del clean_msg["tool_calls"]
+            
+            if clean_msg.get("role") == "tool" and clean_msg.get("tool_call_id"):
+                if clean_msg["tool_call_id"] in orphan_result_ids:
+                    logger.debug(f"[SESSION] Dropping orphaned tool result for id={clean_msg['tool_call_id']}")
+                    continue  # Skip this message entirely
+            
             clean.append(clean_msg)
+        
         return clean
 
 

@@ -38,13 +38,22 @@ class GraphBuilder:
         with open(self.entity_relations_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
-        # 新格式: entities 是 [{"entity": "银灰", "type": "干员"}, ...]
+        # entities 格式: {"干员": [...], "组织": [...], ...} 或 [{"entity": "银灰", "type": "干员"}, ...]
         entities_data = data.get('entities', [])
 
-        # Add nodes (entities) - 遍历每条记录
-        for e in entities_data:
-            if isinstance(e, dict):
-                self.graph.add_node(e.get('entity', ''), type=e.get('type', '干员'))
+        # Add nodes (entities)
+        if isinstance(entities_data, dict):
+            # 新格式: 按类型分组的 dict
+            for entity_type, names in entities_data.items():
+                if isinstance(names, list):
+                    for name in names:
+                        if isinstance(name, str) and name:
+                            self.graph.add_node(name, type=entity_type)
+        elif isinstance(entities_data, list):
+            # 旧格式: 列表
+            for e in entities_data:
+                if isinstance(e, dict):
+                    self.graph.add_node(e.get('entity', ''), type=e.get('type', '干员'))
 
         # Add edges (relations)
         for relation in data.get('relations', []):

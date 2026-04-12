@@ -16,6 +16,7 @@ chunks/
 faiss_index/
 backend/__pycache__/
 backend_old/
+data/*.db
 
 # OS
 Thumbs.db
@@ -24,9 +25,18 @@ Thumbs.db
 # Build
 node_modules/
 dist/
+frontend/node_modules/
+
+# Frontend build
+static/
+.vite/
 
 # Logs
 *.log
+backend_debug.log
+
+# Deploy
+deploy.zip
 
 # Claude Code
 .workbuddy/

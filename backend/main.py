@@ -8,6 +8,7 @@ import os
 import json
 import time
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
@@ -694,6 +695,192 @@ def extract_names_from_markdown_table(content: str) -> List[str]:
     return sorted(list(names))
 
 
+@app.get("/quick-questions")
+async def get_quick_questions():
+    """生成5个快速问题，基于GraphRAG图数据和别名信息。"""
+    import random
+    from backend.rag.query_rewriter import ALIAS_MAP
+
+    questions = []
+
+    # ===== 1. 关系问题：基于 GraphRAG 图中有连线的干员对 =====
+    try:
+        from backend.rag.graphrag.query import get_graph_builder
+        graph_builder = get_graph_builder()
+        graph = graph_builder.graph
+
+        if graph and graph.number_of_nodes() > 0:
+            # 获取所有"干员"类型的节点
+            operator_nodes = [
+                n for n in graph.nodes()
+                if graph.nodes[n].get("type") == "干员" or n in (graph.nodes[n] for n in graph.nodes())
+            ]
+
+            # 尝试多次找到有连线的干员对
+            relation_pair = None
+            for _ in range(50):
+                if not operator_nodes:
+                    break
+                node_a = random.choice(operator_nodes)
+                # 获取所有与 node_a 在同一连通分量中的节点（无向图）
+                # 使用 BFS 找可达节点，记录距离
+                visited = {node_a: 0}
+                queue = [node_a]
+                while queue:
+                    current = queue.pop(0)
+                    for neighbor in graph.successors(current):
+                        if neighbor not in visited:
+                            visited[neighbor] = visited[current] + 1
+                            queue.append(neighbor)
+                    for neighbor in graph.predecessors(current):
+                        if neighbor not in visited:
+                            visited[neighbor] = visited[current] + 1
+                            queue.append(neighbor)
+
+                # 在可达的干员节点中选择（排除自身），距离越近概率越高
+                reachable_operators = [
+                    (n, dist) for n, dist in visited.items()
+                    if n != node_a and n in operator_nodes
+                ]
+
+                if not reachable_operators:
+                    continue
+
+                # 加权随机：距离越近概率越高 (权重 = 1/distance^2)
+                weights = [1.0 / (d * d) for _, d in reachable_operators]
+                total_w = sum(weights)
+                weights = [w / total_w for w in weights]
+
+                idx = random.choices(range(len(reachable_operators)), weights=weights, k=1)[0]
+                node_b, dist = reachable_operators[idx]
+                relation_pair = (node_a, node_b, dist)
+                break
+
+            if relation_pair:
+                a, b, dist = relation_pair
+                questions.append({
+                    "label": f"{a}/{b}关系",
+                    "question": f"{a}和{b}的关系",
+                    "type": "relation",
+                })
+            else:
+                # fallback: 随机两个干员
+                op_names = operator_nodes[:100] if operator_nodes else []
+                if len(op_names) >= 2:
+                    a, b = random.sample(op_names, 2)
+                    questions.append({
+                        "label": f"{a}/{b}关系",
+                        "question": f"{a}和{b}的关系",
+                        "type": "relation",
+                    })
+        else:
+            # no graph, use fallback
+            questions.append({
+                "label": "银灰/初雪关系",
+                "question": "银灰和初雪的关系",
+                "type": "relation",
+            })
+    except Exception as e:
+        logger.error(f"Failed to generate relation question: {e}")
+        questions.append({
+            "label": "银灰/初雪关系",
+            "question": "银灰和初雪的关系",
+            "type": "relation",
+        })
+
+    # ===== 2. 技能问题：随机干员 =====
+    try:
+        operators_file = DATA_DIR / "all_operators.json"
+        if operators_file.exists():
+            with open(operators_file, 'r', encoding='utf-8') as f:
+                operators_data = json.load(f)
+            op_names = [op['干员名'] for op in operators_data if '干员名' in op]
+            if op_names:
+                chosen = random.choice(op_names)
+                questions.append({
+                    "label": f"{chosen}技能",
+                    "question": f"{chosen}的技能是什么",
+                    "type": "skill",
+                })
+    except Exception:
+        questions.append({
+            "label": "银灰技能",
+            "question": "银灰的技能是什么",
+            "type": "skill",
+        })
+
+    # ===== 3. 故事问题：随机故事 =====
+    try:
+        story_file = DATA_DIR / "story_summary.md"
+        if story_file.exists():
+            with open(story_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            story_names = extract_names_from_markdown_table(content)
+            if story_names:
+                chosen = random.choice(story_names)
+                questions.append({
+                    "label": f"{chosen}故事",
+                    "question": f"{chosen}故事内容",
+                    "type": "story",
+                })
+    except Exception:
+        questions.append({
+            "label": "骑士故事",
+            "question": "骑士故事内容",
+            "type": "story",
+        })
+
+    # ===== 4. 背景故事：随机干员（优先选在图中的干员） =====
+    try:
+        # 从 char_summary 中获取角色名
+        char_file = DATA_DIR / "char_summary.md"
+        if char_file.exists():
+            with open(char_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            char_names = extract_names_from_markdown_table(content)
+            if char_names:
+                chosen = random.choice(char_names)
+                questions.append({
+                    "label": f"{chosen}背景",
+                    "question": f"{chosen}背景故事",
+                    "type": "background",
+                })
+    except Exception:
+        questions.append({
+            "label": "银灰背景",
+            "question": "银灰背景故事",
+            "type": "background",
+        })
+
+    # ===== 5. 别名问题：从有别名的干员中抽取 =====
+    # 收集每个干员的所有别名
+    alias_groups = {}
+    for alias, real_name in ALIAS_MAP.items():
+        if alias == real_name:
+            continue
+        if real_name not in alias_groups:
+            alias_groups[real_name] = []
+        alias_groups[real_name].append(alias)
+
+    if alias_groups:
+        operator_name = random.choice(list(alias_groups.keys()))
+        aliases = alias_groups[operator_name]
+        questions.append({
+            "label": f"{operator_name}别名",
+            "question": f"{operator_name}别名有什么",
+            "type": "alias",
+        })
+    else:
+        # fallback
+        questions.append({
+            "label": "银灰别名",
+            "question": "银灰别名有什么",
+            "type": "alias",
+        })
+
+    return {"questions": questions}
+
+
 @app.get("/operators")
 async def get_operators():
     """获取所有干员名列表（从all_operators.json）"""
@@ -753,6 +940,8 @@ async def get_stories():
 # ============== Serve Frontend Static Files ==============
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
+API_PREFIXES = ("/auth/", "/conversations", "/query", "/agent/", "/api", "/health", "/status", "/stats", "/chunks/", "/knowledge-graph", "/operators", "/characters", "/stories", "/debug/", "/eval", "/docs", "/openapi", "/redoc")
+
 if STATIC_DIR.is_dir():
     app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
 
@@ -765,13 +954,16 @@ if STATIC_DIR.is_dir():
     async def serve_root():
         return FileResponse(STATIC_DIR / "index.html")
 
-    # Catch-all: serve index.html for any non-API path (Vue SPA)
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
-        file_path = STATIC_DIR / full_path
-        if file_path.is_file():
-            return FileResponse(file_path)
-        return FileResponse(STATIC_DIR / "index.html")
+    # Use middleware for SPA catch-all instead of route to avoid 405 on API POST paths
+    @app.middleware("http")
+    async def spa_catch_all(request: Request, call_next):
+        response = await call_next(request)
+        if response.status_code == 404 and request.method == "GET":
+            path = request.url.path.lstrip("/")
+            # Only serve index.html for non-API paths
+            if not any(path.startswith(p.lstrip("/")) or path == p.lstrip("/").rstrip("/") for p in API_PREFIXES):
+                return FileResponse(STATIC_DIR / "index.html")
+        return response
 
 
 # ============== Run Server ==============

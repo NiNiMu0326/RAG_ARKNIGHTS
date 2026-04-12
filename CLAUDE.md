@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-明日方舟RAG智能问答助手 - 基于 AgenticRAG 的明日方舟游戏内容问答系统。Agent 驱动架构，DeepSeek-chat Function Calling 自主决定检索路径，支持并行工具调用、SSE 流式输出、GraphRAG 知识图谱、会话管理。兼容旧版 PipelineRAG（`/query` 端点）。
+明日方舟RAG智能问答助手 - 基于 AgenticRAG 的明日方舟游戏内容问答系统。Agent 驱动架构，DeepSeek-chat Function Calling 自主决定检索路径，支持并行工具调用、SSE 流式输出、GraphRAG 知识图谱、会话管理。**支持用户认证系统**（JWT），用户对话历史持久化到 SQLite。兼容旧版 PipelineRAG（`/query` 端点）。
 
 ## 架构
 

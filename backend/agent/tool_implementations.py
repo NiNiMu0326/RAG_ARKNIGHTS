@@ -209,7 +209,7 @@ def _get_bm25_indexes():
         indexes = {}
         for name in ["operators", "stories", "knowledge"]:
             try:
-                path = str(Path(__file__).parent.parent.parent / "chunks") + f"/{name}_bm25.pkl"
+                path = config.get_bm25_index_path(name)
                 indexes[name] = BM25Indexer.load(path)
                 logger.info(f"Loaded BM25 index: {name}")
             except FileNotFoundError:

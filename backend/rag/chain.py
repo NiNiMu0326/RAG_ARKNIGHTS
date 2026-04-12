@@ -4,7 +4,6 @@ Composes all steps into a single Runnable chain with LangSmith tracing.
 """
 import sys
 import time
-import warnings
 import logging
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -28,7 +27,6 @@ from backend.rag.graphrag.query import GraphRAGQuery
 from backend.lc.embeddings import SiliconFlowEmbeddings
 from backend.lc.reranker import SiliconFlowReranker
 from backend.rag.retrievers import MultiChannelRetriever
-from backend.data.bm25_index import BM25Indexer
 from backend import config
 
 logger = logging.getLogger(__name__)

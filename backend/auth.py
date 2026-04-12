@@ -1,13 +1,14 @@
 """
 backend/auth.py — User authentication: register, login, JWT, password reset.
 """
+import os
 import bcrypt
 import jwt
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-JWT_SECRET = "arknights-rag-jwt-secret-change-in-production"
+JWT_SECRET = os.environ.get("JWT_SECRET", "arknights-rag-jwt-secret-change-in-production")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_DAYS = 30
 
