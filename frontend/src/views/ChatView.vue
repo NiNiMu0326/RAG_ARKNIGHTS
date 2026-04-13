@@ -422,6 +422,7 @@ function autoResize(e) {
   if (!content) {
     textarea.style.height = 'auto'
     textarea.style.overflowY = 'hidden'
+    textarea.style.minHeight = '50px'
   } else {
     textarea.style.height = 'auto'
     textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px'
@@ -745,7 +746,7 @@ function scrollToBottom() {
 .chat-input-area { padding: var(--spacing-lg); background: var(--bg-panel); border-top: 1px solid var(--border-color); }
 .chat-form { display: flex; gap: var(--spacing-md); align-items: center; }
 .chat-input-wrapper { flex: 1; position: relative; }
-.chat-input { width: 100%; padding: var(--spacing-md); padding-right: 44px; resize: none; min-height: 50px; max-height: 150px; box-sizing: border-box; }
+.chat-input { width: 100%; padding: var(--spacing-md); padding-right: 44px; resize: none; min-height: 50px; max-height: 150px; box-sizing: border-box; overflow: hidden; }
 .chat-submit { width: 44px; height: 44px; padding: 0; margin-top: -6px; background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dim) 100%); border: none; border-radius: 12px; color: var(--bg-deep); cursor: pointer; transition: all var(--transition-fast); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .chat-submit:hover { transform: scale(1.05); box-shadow: 0 0 20px var(--color-primary-glow); }
 .chat-submit:active { transform: scale(0.95); }
