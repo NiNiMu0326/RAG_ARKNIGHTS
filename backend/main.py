@@ -161,7 +161,7 @@ async def status():
         "api_key_configured": bool(SILICONFLOW_API_KEY),
         "embedding_model": config.EMBEDDING_MODEL,
         "reranker_model": config.RERANKER_MODEL,
-        "llm_model": LLM_MODEL or "not configured"
+        "llm_model": config.DEEPSEEK_LLM_MODEL or "not configured"
     }
 
 
