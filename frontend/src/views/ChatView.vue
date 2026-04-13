@@ -761,8 +761,16 @@ function scrollToBottom() {
   .chat-messages { padding: var(--spacing-md); }
   .quick-actions { gap: var(--spacing-xs); }
   .quick-action { font-size: 0.75rem; padding: var(--spacing-xs) var(--spacing-sm); }
-  .chat-message { max-width: 92%; }
+  .chat-message { max-width: 95%; }
   .chat-bubble { padding: var(--spacing-sm) var(--spacing-md); }
+  /* Thinking card: 固定宽度，不左右滚动 */
+  .thinking-card { max-width: 95%; }
+  .thinking-card-preview { white-space: normal; word-break: break-all; }
+  .thinking-card-content { max-height: 150px; }
+  /* Tool card */
+  .tool-call-card { max-width: 95%; }
+  .tool-call-name { font-size: 0.7rem; }
+  .tool-call-args { font-size: 0.65rem; }
 }
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: var(--spacing-xl); }
 .empty-state-title { font-family: var(--font-display); font-size: 1.25rem; color: var(--text-secondary); margin-bottom: var(--spacing-sm); }
@@ -802,7 +810,7 @@ function scrollToBottom() {
 .chat-message.user .chat-bubble { background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dim) 100%); color: var(--bg-deep); border-bottom-right-radius: var(--radius-sm); }
 .chat-message.assistant .chat-bubble { background: var(--bg-panel); border: 1px solid var(--border-color); border-bottom-left-radius: var(--radius-sm); }
 .chat-role { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: var(--spacing-xs); opacity: 0.7; }
-.chat-text { line-height: 1.6; white-space: pre-wrap; }
+.chat-text { line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .chat-time { font-size: 0.7rem; opacity: 0.5; margin-top: var(--spacing-xs); text-align: right; }
 /* Thinking card (clickable whole card to expand/collapse) */
 .thinking-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--spacing-sm) var(--spacing-md); max-width: 85%; margin-bottom: var(--spacing-md); animation: fadeSlideIn 0.3s ease-out; margin-right: auto; cursor: pointer; user-select: none; transition: border-color var(--transition-fast); }
