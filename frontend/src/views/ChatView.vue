@@ -438,6 +438,7 @@ async function sendMessage() {
   if (isLoading.value) {
     if (messageQueue.value.length < 20) {
       messageQueue.value.push(content)
+      inputText.value = ''  // 清空输入框
     }
     return
   }
