@@ -48,10 +48,9 @@
 **Agent 核心：**
 - `backend/agent/core.py` - Agent 主循环（SSE、并行 FC、循环检测）
 - `backend/agent/tools.py` - 工具 Schema 定义 + ToolRegistry
-- `backend/agent/tool_implementations.py` - 四个工具实现 + BM25/GraphBuilder 懒加载单例
+- `backend/agent/tool_implementations.py` - 三个工具实现 + BM25/GraphBuilder 懒加载单例
 - `backend/agent/sessions.py` - 会话管理（TTL 3600s、LRU、线程安全）
 - `backend/agent/prompts.py` - 系统提示词 + 上下文构建
-- `backend/agent/skills.py` - Skills 扫描、读取、摘要
 
 **API 客户端：**
 - `backend/api/llm_factory.py` - 多 Provider LLM 工厂

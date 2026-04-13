@@ -77,24 +77,6 @@ TOOL_SCHEMAS = [
                 "additionalProperties": False
             }
         }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_skill",
-            "description": "读取指定 Skill 的完整指令内容。当判断需要使用某个 Skill 时调用此工具获取完整操作指南，然后严格按照指南执行。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "skill_name": {
-                        "type": "string",
-                        "description": "Skill 名称（如 pptx, docx, pdf, xlsx）"
-                    }
-                },
-                "required": ["skill_name"],
-                "additionalProperties": False
-            }
-        }
     }
 ]
 
@@ -145,9 +127,7 @@ def _register_default_tools(registry: ToolRegistry):
         execute_rag_search,
         execute_graphrag_search,
         execute_web_search,
-        execute_read_skill,
     )
     registry.register("arknights_rag_search", execute_rag_search)
     registry.register("arknights_graphrag_search", execute_graphrag_search)
     registry.register("web_search", execute_web_search)
-    registry.register("read_skill", execute_read_skill)

@@ -1,12 +1,11 @@
-﻿# 明日方舟 RAG 助手
+﻿# 明日方舟 Agentic RAG
 
-基于明日方舟数据集的 Agentic RAG 智能问答系统。Agent 通过 Function Calling 自主决定检索路径，支持知识库检索、知识图谱查询、网络搜索和技能读取。
+基于明日方舟数据集的 Agentic RAG 智能问答系统。Agent 通过 Function Calling 自主决定检索路径，支持知识库检索、知识图谱查询和网络搜索。
 
 ## 功能特性
 
 - **Agentic RAG**：LLM 通过 Function Calling 自主选择工具、并行执行、判断信息充足性
 - **多 LLM 支持**：DeepSeek-V3.2（硅基流动/官方）、MiniMax-M2.5/M2.7 多模型切换
-- **Skills 系统**：可插拔技能模块，通过 `read_skill` 工具按需加载到 Agent 上下文
 - **用户认证**：注册、登录、JWT 令牌认证，会话持久化到 SQLite
 - **SSE 流式输出**：实时显示 Agent 思考过程、工具执行状态、回答生成
 - **知识库检索**：FAISS 向量 + BM25 混合检索 + Cross-Encoder 重排 + Parent Document 扩展
@@ -42,7 +41,7 @@ cp .env.example .env
 
 可选：
 - `DEEPSEEK_API_KEY_2` - DeepSeek 官方模型（不填则默认使用硅基流动）
-- `TAVILY_API_KEY` - 网络搜索补充
+- `TAVILY_API_KEY` - 网络搜索（不填则使用 DuckDuckGo 兜底）
 - `MINIMAX_API_KEY` - MiniMax 模型
 
 ### 3. 前端
@@ -80,14 +79,13 @@ cd frontend && npm run dev
                               补充检索（最多 8 轮）
 ```
 
-**四个工具：**
+**三个工具：**
 
 | 工具 | 功能 | 内部流程 |
 |------|------|----------|
 | `arknights_rag_search` | 知识库检索 | FAISS + BM25 → RRF 融合 → 重排 → Parent Doc |
 | `arknights_graphrag_search` | 知识图谱查询 | 单实体邻居 / 双实体最短路径 |
 | `web_search` | 网络搜索 | Tavily + DuckDuckGo |
-| `read_skill` | 读取技能文件 | 加载 `data/skills/` 中的 Markdown 技能 |
 
 **安全机制：** 最大 8 轮调用、循环检测（最近 3 轮相同 tool_calls）、SSE 流式输出
 
@@ -102,14 +100,14 @@ RAG_ARKNIGHTS_Agent/
 │   ├── agent/               # Agent 核心
 │   │   ├── core.py          # Agent 主循环（SSE、并行 FC、循环检测）
 │   │   ├── tools.py         # 工具 Schema + ToolRegistry
-│   │   ├── tool_implementations.py  # 工具实现（RAG/GraphRAG/Web/Skill）
-│   │   ├── skills.py        # Skills 技能模块管理
+│   │   ├── tool_implementations.py  # 工具实现（RAG/GraphRAG/Web）
 │   │   ├── sessions.py      # 会话管理（TTL、LRU、线程安全）
 │   │   └── prompts.py       # 系统提示词 + 上下文构建
 │   ├── api/
 │   │   ├── deepseek.py      # OpenAI 兼容客户端（LLM + FC）
 │   │   ├── llm_factory.py   # 多 Provider 工厂（DeepSeek/SiliconFlow/MiniMax）
-│   │   └── siliconflow.py   # SiliconFlow API（嵌入 + 重排 + 搜索）
+│   │   ├── siliconflow.py   # SiliconFlow API（嵌入 + 重排 + LLM）
+│   │   └── web_search.py    # 网络搜索（Tavily + DuckDuckGo）
 │   ├── rag/
 │   │   ├── retrievers.py    # 多通道检索（FAISS + BM25 + RRF）
 │   │   ├── parent_document.py  # Parent Document 扩展（LRU 缓存）
@@ -140,9 +138,7 @@ RAG_ARKNIGHTS_Agent/
 │       │   ├── settings.js    # 模型/参数设置
 │       │   └── quickQuestions.js  # 快捷问题
 │       └── api.js             # API 客户端（Agent SSE）
-├── data/
-│   ├── skills/               # Skills 技能文件（Markdown）
-│   └── *.json/*.md            # 原始数据
+├── data/                      # 原始数据（JSON/Markdown）
 ├── chunks/                    # 文本切块
 ├── faiss_index/               # FAISS 向量索引
 ├── Scripts/                   # 辅助脚本
@@ -205,7 +201,7 @@ RAG_ARKNIGHTS_Agent/
 | 向量数据库 | FAISS |
 | 嵌入模型 | BAAI/bge-m3（SiliconFlow） |
 | 重排模型 | BAAI/bge-reranker-v2-m3（SiliconFlow） |
-| 网络搜索 | Tavily + DuckDuckGo（SiliconFlow） |
+| 网络搜索 | Tavily + DuckDuckGo |
 | 知识图谱 | NetworkX DiGraph |
 | 数据库 | SQLite（aiosqlite） |
 | 前端 | Vue.js 3 + Vite + Pinia |

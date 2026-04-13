@@ -36,14 +36,9 @@ SYSTEM_PROMPT = """# 角色
 def build_messages(session) -> list:
     """Build the messages list for the LLM API call.
     
-    Prepends system prompt (with skills summary) and formats session history.
+    Prepends system prompt and formats session history.
     """
-    from backend.agent.skills import build_skills_summary
-
-    skills_summary = build_skills_summary()
     system_content = SYSTEM_PROMPT
-    if skills_summary:
-        system_content = system_content.rstrip() + "\n\n" + skills_summary
 
     messages = [{"role": "system", "content": system_content}]
     messages.extend(session.get_context_messages(max_turns=20))

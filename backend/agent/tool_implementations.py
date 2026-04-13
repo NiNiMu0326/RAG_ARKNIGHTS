@@ -175,30 +175,6 @@ async def execute_web_search(arguments: Dict[str, Any]) -> List[Dict]:
         return [{"error": f"网络搜索失败: {str(e)}"}]
 
 
-async def execute_read_skill(arguments: Dict[str, Any]) -> str:
-    """Execute read_skill tool. Returns the full content of a Skill's SKILL.md."""
-    skill_name = arguments.get("skill_name", "")
-
-    if not skill_name:
-        return "错误: skill_name 参数是必需的"
-
-    try:
-        from backend.agent.skills import read_skill_content, scan_skills
-        skills = scan_skills()
-        content = read_skill_content(skill_name=skill_name, skills=skills)
-
-        if content is None:
-            available = ", ".join(s["name"] for s in skills)
-            return f"未找到名为 '{skill_name}' 的 Skill。可用 Skills: {available}"
-
-        # Truncate if extremely long to avoid token limits
-        if len(content) > 15000:
-            content = content[:15000] + "\n\n... (内容已截断，如需更多请进一步查询)"
-
-        return content
-    except Exception as e:
-        logger.error(f"Read skill failed: {e}", exc_info=True)
-        return f"读取 Skill 失败: {str(e)}"
 
 
 # ===== Lazy-loaded singletons =====
