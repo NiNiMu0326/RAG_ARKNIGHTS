@@ -4,134 +4,111 @@
 
 ## 项目概述
 
-明日方舟RAG智能问答助手 - 基于 AgenticRAG 的明日方舟游戏内容问答系统。Agent 驱动架构，DeepSeek-chat Function Calling 自主决定检索路径，支持并行工具调用、SSE 流式输出、GraphRAG 知识图谱、会话管理。**支持用户认证系统**（JWT），用户对话历史持久化到 SQLite。兼容旧版 PipelineRAG（`/query` 端点）。
+明日方舟 Agentic RAG 问答系统。Agent 通过 Function Calling 自主决定检索路径，支持并行工具调用、SSE 流式输出、GraphRAG 知识图谱、Skills 可插拔技能系统、用户认证（JWT）、会话持久化（SQLite）、多 LLM 模型切换。
+
+**注意：本项目已移除旧的 PipelineRAG 架构。所有 RAG 功能通过 Agent 工具调用实现，不存在独立的查询改写/CRAG/答案生成步骤。**
 
 ## 架构
 
-### AgenticRAG（主要流程，`backend/agent/`）
+### Agent 主循环（`backend/agent/core.py`）
 
-Agent 循环：DeepSeek-chat 自主选择工具 → 并行执行 → 判断信息充足性 → 生成回答
+```
+用户消息 → build_messages() → LLM(FC) → tool_calls? → 并行执行 → 加入结果 → 继续循环
+                                                    ↓ 无 tool_calls
+                                              流式输出回答 → 结束
+```
 
-**三个工具：**
-1. `arknights_rag_search` - 知识库检索（MultiChannelRetriever → Reranker → ParentDocument）
+**四个工具（`backend/agent/tool_implementations.py`）：**
+1. `arknights_rag_search` - 知识库检索（FAISS + BM25 → RRF → 重排 → Parent Doc）
 2. `arknights_graphrag_search` - 知识图谱查询（单实体邻居 / 双实体路径）
 3. `web_search` - 网络搜索（Tavily + DuckDuckGo）
+4. `read_skill` - 读取 `data/skills/` 中的 Markdown 技能文件
 
-**安全机制：** max_rounds=8 硬限制、detect_loop() 循环检测（最近4次相同调用）
+**安全机制：** max_rounds=8 硬限制、detect_loop() 循环检测（最近 3 轮相同 tool_calls）
 
-### 旧版 PipelineRAG（兼容，`backend/rag/orchestrator.py`）
+### Skills 系统（`backend/agent/skills.py`）
 
-8步固定流程：查询改写 → 多路召回 → GraphRAG → 重排 → CRAG → Parent Doc → 网络搜索 → 答案生成
+技能文件位于 `data/skills/`，Markdown 格式，通过 `read_skill` 工具按需加载到 Agent 上下文。`prompts.py` 中的系统提示词会自动列出可用技能清单。
 
-### 核心后端组件
+### LLM 多模型（`backend/api/llm_factory.py`）
 
-**AgenticRAG：**
-- `backend/agent/core.py` - Agent 主循环（SSE 流式、并行 FC、循环检测）
+所有 Provider 通过 OpenAI 兼容 API 统一，底层复用 `DeepSeekClient`（切换 base_url/api_key/model）。
+
+| model_id | Provider | 显示名称 |
+|----------|----------|----------|
+| `siliconflow-deepseek-v3` | SiliconFlow | DeepSeek-V3.2 (硅基流动) |
+| `deepseek-chat` | DeepSeek | DeepSeek-V3.2 (DeepSeek官方) |
+| `minimax-m2.5` | MiniMax | MiniMax-M2.5 |
+| `minimax-m2.7` | MiniMax | MiniMax-M2.7 |
+
+默认模型：`siliconflow-deepseek-v3`
+
+### 核心后端文件
+
+**Agent 核心：**
+- `backend/agent/core.py` - Agent 主循环（SSE、并行 FC、循环检测）
 - `backend/agent/tools.py` - 工具 Schema 定义 + ToolRegistry
-- `backend/agent/tool_implementations.py` - 三个工具的具体实现
-- `backend/agent/sessions.py` - 会话管理（TTL、LRU 驱逐、线程安全）
+- `backend/agent/tool_implementations.py` - 四个工具实现 + BM25/GraphBuilder 懒加载单例
+- `backend/agent/sessions.py` - 会话管理（TTL 3600s、LRU、线程安全）
 - `backend/agent/prompts.py` - 系统提示词 + 上下文构建
+- `backend/agent/skills.py` - Skills 扫描、读取、摘要
 
-**PipelineRAG：**
-- `backend/rag/orchestrator.py` - RAG 流程编排器（单例模式）
-- `backend/rag/query_rewriter.py` - 查询改写（fast_rule + Qwen LLM）
-- `backend/rag/retrievers.py` - 多路召回（FAISS + BM25 + RRF）
-- `backend/rag/crag.py` - CRAG 判断（HIGH/LOW 二分类）
-- `backend/rag/answer_generator.py` - 答案生成
+**API 客户端：**
+- `backend/api/llm_factory.py` - 多 Provider LLM 工厂
+- `backend/api/deepseek.py` - OpenAI 兼容客户端（LLM + Function Calling + 流式）
+- `backend/api/siliconflow.py` - SiliconFlow API（嵌入 + 重排 + 搜索）
+
+**RAG 基础设施（被 Agent 工具调用）：**
+- `backend/rag/retrievers.py` - 多通道检索（FAISS + BM25 + RRF），含 5h 缓存
 - `backend/rag/parent_document.py` - Parent Document 扩展（LRU 缓存）
+- `backend/rag/alias_map.py` - 干员别名映射（供 `/quick-questions` API 使用）
 - `backend/rag/graphrag/builder.py` - 图谱构建（NetworkX DiGraph）
-- `backend/rag/graphrag/query.py` - 图谱查询
+- `backend/rag/graphrag/query.py` - 图谱查询（单例 get_graph_builder）
+
+**LangChain 封装（仅检索相关，LLM ChatModel 已删除）：**
+- `backend/lc/embeddings.py` - LangChain Embeddings（被 retrievers.py 和 tool_implementations.py 使用）
+- `backend/lc/reranker.py` - LangChain Reranker（被 tool_implementations.py 使用）
 
 **基础设施：**
-- `backend/storage/__init__.py` - FAISS 向量存储封装
-- `backend/api/siliconflow.py` - SiliconFlow API 客户端（嵌入 + 重排 + 网络搜索）
-- `backend/api/deepseek.py` - DeepSeek API 客户端（LLM + Function Calling）
+- `backend/storage/faiss_client.py` - FAISS 索引封装
+- `backend/db.py` - SQLite 数据库（aiosqlite）
+- `backend/auth.py` - JWT 认证
 
 ### 前端结构
+
 - `frontend/src/views/ChatView.vue` - 问答界面（SSE 流式 + 工具调用卡片）
-- `frontend/src/views/AdminView.vue` - 管理面板（调试、评估、参数配置）
+- `frontend/src/views/AdminView.vue` - 管理面板（Chunk 可视化、数据仪表板）
 - `frontend/src/views/GraphView.vue` - 知识图谱可视化（Cytoscape.js）
-- `frontend/src/stores/` - Pinia 状态管理（sessions、settings、quickQuestions）
-- `frontend/src/api.js` - API 客户端（含 Agent SSE 流式）
-
-### 数据集合
-FAISS 三个 collection：`operators`（干员）、`stories`（剧情）、`knowledge`（游戏知识）
-
-### 知识库切块
-- `backend/data/chunker.py` - 文本切块主脚本
-- `chunks/knowledge/gameplay_*.md` - 游戏玩法（按 `---` 分隔，每种玩法一个 chunk）
+- `frontend/src/stores/` - Pinia 状态管理（sessions、auth、settings、quickQuestions）
+- `frontend/src/api.js` - API 客户端（Agent SSE）
 
 ### API 端点
 
-**AgenticRAG：**
-- `POST /agent/session` - 创建 Agent 会话
-- `POST /agent/chat` - Agent SSE 流式对话
-- `GET /agent/session/{id}/messages` - 获取消息历史
-- `DELETE /agent/session/{id}` - 删除会话
-- `GET /agent/debug/trace` - 调试追踪
-- `GET /agent/stats` - 会话统计
+**Agent：** `POST /agent/chat`、`POST /agent/session`、`GET /agent/models`
+**认证：** `POST /auth/register`、`POST /auth/login`、`GET /auth/me`
+**会话：** `GET /conversations`、`POST /conversations/sync`、`DELETE /conversations/{id}`
+**数据：** `GET /health`、`GET /stats`、`GET /chunks/{collection}`、`GET /knowledge-graph`
+**快捷：** `GET /quick-questions`、`GET /operators`、`GET /stories`
 
-**PipelineRAG（兼容）：**
-- `POST /query` - 执行完整 RAG 流程
-- `POST /debug/step` - 单步执行 RAG 流程（用于调试）
+完整路由见 `backend/main.py`。
 
-**其他：**
-- `GET /chunks/{collection}` - 列出切块文件
-- `GET /knowledge-graph` - 获取知识图谱实体关系
-- `GET /stats` - 系统统计信息
-- `GET /eval/stream` / `POST /eval/start` - 运行 RAG 评估
-- `GET /health` - Docker 健康检查
-- `GET /operators` / `GET /characters` / `GET /stories` - 数据列表
+## 环境变量（`backend/.env`）
 
-## 配置参数
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `top_k_per_channel` | 8 | 每库召回数量 |
-| `rerank_top_k` | 5 | 重排输出数量 |
-| `vector_weight` | 0.5 | 向量/BM25 权重 |
-| `inner_top_k` | 20 | 内部搜索数量 |
-
-环境变量配置（`backend/.env`）：
-- `SILICONFLOW_API_KEY` - 必需，用于嵌入、重排、查询改写
-- `DEEPSEEK_API_KEY_2` - 必需，用于 LLM 对话（答案生成）
-- `TAVILY_API_KEY` - 可选，用于网络搜索补充
-
-模型配置（`backend/config.py`）：
-- 嵌入模型：`BAAI/bge-m3`
-- 重排模型：`BAAI/bge-reranker-v2-m3`
-- 查询改写：`Qwen/Qwen2.5-7B-Instruct`
-- LLM：`deepseek-chat`（DeepSeek API）
-
-## Docker 部署
-
-- `Dockerfile` - 后端镜像构建
-- `docker-compose.yml` - 容器编排
-- `nginx.conf` - 反向代理配置
-
-## 缓存策略
-
-PipelineRAG 缓存（5 小时 TTL）：
-- `_rewrite_cache` - QueryRewriter LLM 结果
-- `_recall_cache` - Multi-Channel Recall 结果
-- `_hybrid_cache` - Hybrid Search 结果
-- `LRUCache` - Parent Document（max 100 条）
-- `_bm25_indexes` - BM25 索引（懒加载）
-
-AgenticRAG 会话：
-- TTL 3600s，最大 1000 会话，LRU 驱逐最旧会话
-- BM25 索引和 GraphBuilder 懒加载单例（线程安全）
+- `SILICONFLOW_API_KEY` - 必需（嵌入 + 重排 + 搜索）
+- `DEEPSEEK_API_KEY_2` - 可选（DeepSeek 官方模型）
+- `TAVILY_API_KEY` - 可选（网络搜索补充）
+- `MINIMAX_API_KEY` - 可选（MiniMax 模型）
 
 ## 开发注意事项
 
-- AgenticRAG 使用 DeepSeek-chat Function Calling，**不要传 `parallel_tool_calls` 参数**（会使其更保守）
+- Agent 使用 DeepSeek Function Calling，**不要传 `parallel_tool_calls` 参数**（会使其更保守）
 - Agent 工具通过 `ToolRegistry` 注册，实现在 `tool_implementations.py`
-- SSE 事件类型：`tool_calls_start`、`tool_call_result`、`answer_delta`、`answer_done`、`error`
+- SSE 事件类型：`thinking_start`、`thinking_delta`、`tool_calls_start`、`tool_executing`、`tool_call_result`、`answer_delta`、`answer_done`、`error`
 - GraphRAG 使用 `nx.DiGraph`（有向图），路径查找使用无向视图
-- 旧版 PipelineRAG 仍可通过 `/query` 端点使用
-- BM25 索引采用懒加载策略，首次召回时加载
+- BM25 索引和 GraphBuilder 采用懒加载单例（线程安全）
 - FAISS 向量数据持久化到 `faiss_index/` 目录
 - GraphRAG 实体关系数据在 `chunks/graphrag/entity_relations.json`
+- Skills 文件放在 `data/skills/`，每个技能一个 Markdown 文件
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

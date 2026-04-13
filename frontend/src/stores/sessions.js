@@ -67,15 +67,10 @@ export const useSessionStore = defineStore('sessions', () => {
       _loadFromLocalStorage()
     }
 
-    const lastActive = localStorage.getItem('arknights_rag_last_session')
-    const sessionIds = Object.keys(sessions.value)
-    if (sessionIds.length > 0) {
-      if (lastActive && sessions.value[lastActive]) {
-        currentSessionId.value = lastActive
-      } else {
-        currentSessionId.value = sessionIds[0]
-      }
-      lastActiveSessionId.value = currentSessionId.value
+    // Don't auto-select a session — show welcome page on page load
+    // Sessions are listed in sidebar for user to click
+    if (Object.keys(sessions.value).length === 0) {
+      createNewSession()
     }
   }
 
@@ -178,7 +173,11 @@ export const useSessionStore = defineStore('sessions', () => {
       const remaining = Object.keys(sessions.value).sort(
         (a, b) => sessions.value[b].updatedAt - sessions.value[a].updatedAt
       )
-      currentSessionId.value = remaining.length > 0 ? remaining[0] : null
+      if (remaining.length > 0) {
+        currentSessionId.value = remaining[0]
+      } else {
+        createNewSession()
+      }
     }
     if (lastActiveSessionId.value === sessionId) {
       lastActiveSessionId.value = currentSessionId.value
@@ -245,6 +244,22 @@ export const useSessionStore = defineStore('sessions', () => {
     }
   }
 
+  function addThinkingMessage(roundNum, content, timeMs = 0) {
+    let targetSessionId = currentSessionId.value
+    if (!targetSessionId || !sessions.value[targetSessionId]) return
+
+    const session = sessions.value[targetSessionId]
+    session.messages.push({
+      role: 'thinking',
+      round: roundNum,
+      content: content,
+      timestamp: Date.now(),
+      time_ms: timeMs,
+    })
+    session.updatedAt = Date.now()
+    saveSessions()
+  }
+
   function addToolCallMessage(toolCalls, roundNum) {
     let targetSessionId = currentSessionId.value
     if (!targetSessionId || !sessions.value[targetSessionId]) return
@@ -265,17 +280,19 @@ export const useSessionStore = defineStore('sessions', () => {
     if (!targetSessionId || !sessions.value[targetSessionId]) return
 
     const session = sessions.value[targetSessionId]
-    const msg = session.messages.find(
+    const msgIdx = session.messages.findIndex(
       m => m.role === 'tool_call' && m.calls?.some(c => c.id === toolCallId)
     )
-    if (msg) {
-      if (!msg.results) msg.results = {}
-      msg.results[toolCallId] = {
+    if (msgIdx !== -1) {
+      // Replace the message object entirely to guarantee Vue reactivity
+      const msg = session.messages[msgIdx]
+      const newResults = { ...(msg.results || {}), [toolCallId]: {
         summary: result.summary || '完成',
         time_ms: result.time_ms || 0,
         tool_name: result.tool_name || '',
         data: result.result || null,
-      }
+      }}
+      session.messages.splice(msgIdx, 1, { ...msg, results: newResults })
       saveSessions()
     }
   }
@@ -348,6 +365,7 @@ export const useSessionStore = defineStore('sessions', () => {
     switchSession,
     renameSession,
     addMessage,
+    addThinkingMessage,
     addToolCallMessage,
     updateToolCallResult,
     saveSessions,

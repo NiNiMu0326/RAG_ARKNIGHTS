@@ -480,7 +480,7 @@
   position: absolute;
   top: var(--spacing-lg);
   right: var(--spacing-lg);
-  width: 280px;
+  width: 187px;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -490,12 +490,24 @@
   transform: translateY(-10px);
   transition: all var(--transition-normal);
   z-index: 50;
+  pointer-events: none;
 }
 
 .kg-edge-info.active {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
+  pointer-events: none;
+  transition: all var(--transition-normal);
+}
+
+.kg-edge-info.active.is-hovered {
+  opacity: 0.4;
+}
+
+/* Only close button is clickable, everything else click-through to graph */
+.kg-edge-info .kg-edge-info-close {
+  pointer-events: auto;
 }
 
 .kg-edge-info-header {

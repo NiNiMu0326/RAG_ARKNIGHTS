@@ -110,23 +110,6 @@ export const api = {
     return response.json()
   },
 
-  // ===== RAG Query APIs =====
-  async query(question, options = {}, signal = null) {
-    const fetchOptions = {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, ...options })
-    }
-    if (signal) {
-      fetchOptions.signal = signal
-    }
-    const response = await fetch(`${API_BASE}/query`, fetchOptions)
-    if (!response.ok) throw new Error('Query failed')
-    return response.json()
-  },
-
-
-
   async getStatus() {
     const response = await fetch(`${API_BASE}/status`)
     return response.json()
@@ -149,12 +132,6 @@ export const api = {
 
   async getStats() {
     const response = await fetch(`${API_BASE}/stats`)
-    return response.json()
-  },
-
-  async runEval() {
-    const response = await fetch(`${API_BASE}/eval/run`, { method: 'POST' })
-    if (!response.ok) throw new Error('Eval run failed')
     return response.json()
   },
 
@@ -181,6 +158,15 @@ export const api = {
     if (!response.ok) {
       const err = await response.json()
       throw new Error(err.detail || 'Failed to get stories')
+    }
+    return response.json()
+  },
+
+  async getQuickQuestions() {
+    const response = await fetch(`${API_BASE}/quick-questions`)
+    if (!response.ok) {
+      const err = await response.json()
+      throw new Error(err.detail || 'Failed to get quick questions')
     }
     return response.json()
   },
@@ -229,7 +215,7 @@ export const api = {
    * @param {AbortSignal} signal - AbortController signal
    * @returns {Promise<void>}
    */
-  async agentChat({ sessionId, message, model, onNewSessionId, onToolCallsStart, onToolCallResult, onAnswerDelta, onAnswerDone, onThinkingDelta, onError, signal }) {
+  async agentChat({ sessionId, message, model, onNewSessionId, onThinkingStart, onToolCallsStart, onToolExecuting, onToolCallResult, onAnswerDelta, onAnswerDone, onThinkingDelta, onError, signal }) {
     const body = { session_id: sessionId, message }
     if (model) body.model = model
 
@@ -271,8 +257,14 @@ export const api = {
         try {
           const event = JSON.parse(jsonStr)
           switch (event.type) {
+            case 'thinking_start':
+              onThinkingStart?.(event)
+              break
             case 'tool_calls_start':
               onToolCallsStart?.(event)
+              break
+            case 'tool_executing':
+              onToolExecuting?.(event)
               break
             case 'tool_call_result':
               onToolCallResult?.(event)
@@ -303,7 +295,9 @@ export const api = {
         try {
           const event = JSON.parse(jsonStr)
           switch (event.type) {
+            case 'thinking_start': onThinkingStart?.(event); break
             case 'tool_calls_start': onToolCallsStart?.(event); break
+            case 'tool_executing': onToolExecuting?.(event); break
             case 'tool_call_result': onToolCallResult?.(event); break
             case 'thinking_delta': onThinkingDelta?.(event); break
             case 'answer_delta': onAnswerDelta?.(event); break

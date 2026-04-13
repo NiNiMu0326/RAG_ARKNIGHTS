@@ -13,7 +13,6 @@ BASE_DIR = Path(__file__).parent.parent
 CHUNKS_DIR = BASE_DIR / "chunks"
 GRAPH_DIR = CHUNKS_DIR / "graphrag"
 ENTITY_RELATIONS_FILE = GRAPH_DIR / "entity_relations.json"
-EVAL_QUESTIONS_FILE = BASE_DIR / "eval" / "questions.json"
 DATA_DIR = BASE_DIR / "data"
 
 # API Keys
@@ -28,12 +27,7 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 EMBEDDING_MODEL = "Pro/BAAI/bge-m3"
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 DEEPSEEK_LLM_MODEL = "deepseek-chat"
-LLM_MODEL = "Pro/Qwen/Qwen2.5-7B-Instruct"
 DEFAULT_TEMPERATURE = 0.7
-
-# CRAG Thresholds
-CRAG_HIGH_THRESHOLD = 0.7
-CRAG_LOW_THRESHOLD = 0.4
 
 # Search Settings
 RRF_K = 60

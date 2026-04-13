@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 import uvicorn
 
 from backend.db import get_db, init_db
@@ -36,12 +36,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("arknights_rag")
 
-# Import RAG components
-from backend.rag.orchestrator import RAGOrchestrator, get_orchestrator
+# Import config
 from backend.config import (
-    BASE_DIR, CHUNKS_DIR, FAISS_INDEX_DIR, DATA_DIR,
+    BASE_DIR, CHUNKS_DIR, DATA_DIR,
     ENTITY_RELATIONS_FILE, SILICONFLOW_API_KEY,
-    EMBEDDING_MODEL, RERANKER_MODEL, DEEPSEEK_LLM_MODEL, DEEPSEEK_API_KEY, LLM_MODEL,
+    EMBEDDING_MODEL, RERANKER_MODEL,
 )
 import backend.config as config
 
@@ -100,43 +99,8 @@ async def log_requests(request: Request, call_next):
     
     return response
 
-def get_orch() -> RAGOrchestrator:
-    return get_orchestrator(
-        api_key=str(SILICONFLOW_API_KEY),
-        faiss_index_dir=str(FAISS_INDEX_DIR),
-        deepseek_api_key=str(DEEPSEEK_API_KEY)
-    )
-
-
 # AgenticRAG Session Manager (singleton)
 _session_manager = SessionManager(max_sessions=1000, ttl_seconds=3600)
-
-
-# ============== Request/Response Models ==============
-class QueryRequest(BaseModel):
-    question: str
-    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
-    use_parent_doc: bool = True
-    use_graphrag: bool = True
-    use_crag: bool = True
-    top_k_per_channel: int = 8
-    rerank_top_k: int = 5
-
-    @field_validator('question')
-    @classmethod
-    def question_not_empty(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError('question cannot be empty')
-        return v.strip()
-
-    @field_validator('top_k_per_channel', 'rerank_top_k')
-    @classmethod
-    def top_k_must_be_positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError(f'top_k values must be positive, got {v}')
-        if v > 100:
-            raise ValueError(f'top_k values must not exceed 100, got {v}')
-        return v
 
 
 # ===== AgenticRAG Request Models =====
@@ -154,18 +118,6 @@ class AgentChatRequest(BaseModel):
             raise ValueError('message cannot be empty')
         return v.strip()
 
-
-class QueryResponse(BaseModel):
-    answer: str
-    crag_level: str
-    avg_score: float
-    num_docs_used: int
-    used_web_search: bool
-    retrieved_documents: Optional[List[Dict]] = None
-    retrieved_doc_ids: Optional[List[str]] = None  # 用于评估
-    graph_results: Optional[Dict] = None
-    pipeline_steps: List[Dict] = Field(default_factory=list)
-    total_time_ms: float = 0.0
 
 
 class ChunkInfo(BaseModel):
@@ -211,37 +163,6 @@ async def status():
         "reranker_model": config.RERANKER_MODEL,
         "llm_model": LLM_MODEL or "not configured"
     }
-
-
-@app.post("/query", response_model=QueryResponse)
-async def query(req: QueryRequest):
-    """Execute RAG query and return answer with metadata"""
-    try:
-        orch = get_orch()
-        result = orch.query(
-            question=req.question,
-            conversation_history=req.conversation_history,
-            use_parent_doc=req.use_parent_doc,
-            use_graphrag=req.use_graphrag,
-            use_crag=req.use_crag,
-            top_k_per_channel=req.top_k_per_channel,
-            rerank_top_k=req.rerank_top_k
-        )
-
-        return QueryResponse(
-            answer=result.answer,
-            crag_level=result.crag_level,
-            avg_score=result.avg_score,
-            num_docs_used=result.num_docs_used,
-            used_web_search=result.used_web_search,
-            retrieved_documents=result.retrieved_documents,
-            retrieved_doc_ids=result.retrieved_doc_ids,
-            graph_results=result.graph_results,
-            pipeline_steps=result.pipeline_steps,
-            total_time_ms=result.total_time_ms
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/chunks/{collection}", response_model=List[ChunkInfo])
@@ -699,7 +620,7 @@ def extract_names_from_markdown_table(content: str) -> List[str]:
 async def get_quick_questions():
     """生成5个快速问题，基于GraphRAG图数据和别名信息。"""
     import random
-    from backend.rag.query_rewriter import ALIAS_MAP
+    from backend.rag.alias_map import ALIAS_MAP
 
     questions = []
 
@@ -940,7 +861,7 @@ async def get_stories():
 # ============== Serve Frontend Static Files ==============
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
-API_PREFIXES = ("/auth/", "/conversations", "/query", "/agent/", "/api", "/health", "/status", "/stats", "/chunks/", "/knowledge-graph", "/operators", "/characters", "/stories", "/debug/", "/eval", "/docs", "/openapi", "/redoc")
+API_PREFIXES = ("/auth/", "/conversations", "/agent/", "/api", "/health", "/status", "/stats", "/chunks/", "/knowledge-graph", "/operators", "/characters", "/stories", "/debug/", "/docs", "/openapi", "/redoc")
 
 if STATIC_DIR.is_dir():
     app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")

@@ -6,7 +6,7 @@ SYSTEM_PROMPT = """# 角色
 你是一个明日方舟知识专家助手。你可以使用工具来获取信息，也可以直接回答你已知的问题。
 
 # 思考过程
-在回答之前，你必须先用 <think>...</think> 标签包裹你的思考过程。
+在回答之前，你必须先用  PSI ... PSI  标签包裹你的思考过程。
 在思考过程中分析：
 - 用户问题的意图和关键信息
 - 需要使用哪些工具、用什么参数
@@ -36,8 +36,15 @@ SYSTEM_PROMPT = """# 角色
 def build_messages(session) -> list:
     """Build the messages list for the LLM API call.
     
-    Prepends system prompt and formats session history.
+    Prepends system prompt (with skills summary) and formats session history.
     """
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    from backend.agent.skills import build_skills_summary
+
+    skills_summary = build_skills_summary()
+    system_content = SYSTEM_PROMPT
+    if skills_summary:
+        system_content = system_content.rstrip() + "\n\n" + skills_summary
+
+    messages = [{"role": "system", "content": system_content}]
     messages.extend(session.get_context_messages(max_turns=20))
     return messages

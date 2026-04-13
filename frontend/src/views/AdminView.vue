@@ -7,9 +7,6 @@
       <button class="nav-tab" :class="{ active: activeTab === 'dashboard' }" @click="activeTab = 'dashboard'">
         <span>2</span> 数据仪表板
       </button>
-      <button class="nav-tab" :class="{ active: activeTab === 'eval' }" @click="activeTab = 'eval'">
-        <span>3</span> 评估面板
-      </button>
     </nav>
 
     <div class="admin-content" :data-page="activeTab">
@@ -171,99 +168,6 @@
         </div>
       </div>
 
-      <div v-if="activeTab === 'eval'" class="tab-content">
-        <div class="section-header">
-          <h2 class="section-title">评估面板</h2>
-        </div>
-        <div class="panel">
-          <div class="panel-header">
-            <h3>批量评估</h3>
-            <button class="btn btn-primary" @click="runEvaluation" :disabled="evalRunning">
-              <span>&gt;</span> {{ evalRunning ? '评估中...' : '开始评估' }}
-            </button>
-          </div>
-          <div class="panel-body">
-            <div v-if="evalRunning" class="eval-progress">
-              <div class="mb-md">正在评估...</div>
-              <div class="progress-bar">
-                <div class="progress-fill" :style="{ width: evalProgress + '%' }"></div>
-              </div>
-            </div>
-
-            <div v-if="evalResults">
-              <div class="eval-result-summary">
-                <h4>评估结果</h4>
-                <div class="eval-metrics">
-                  <div class="eval-metric">
-                    <div class="eval-metric-value">{{ evalResults.avg_score?.toFixed(1) || '--' }}</div>
-                    <div class="eval-metric-label">平均分数</div>
-                  </div>
-                  <div class="eval-metric">
-                    <div class="eval-metric-value">{{ evalResults.total_questions || 0 }}</div>
-                    <div class="eval-metric-label">总问题数</div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Result Cards -->
-              <div class="eval-result-cards">
-                <div v-for="result in evalResults.results" :key="result.question_id" class="eval-result-card" :class="{ expanded: result.expanded }">
-                  <div class="eval-card-header" @click="toggleEvalResultExpandedByResult(result)">
-                    <div class="eval-card-summary">
-                      <span class="eval-card-id">#{{ result.question_id }}</span>
-                      <span class="eval-card-question">{{ escapeHtml(result.question) }}</span>
-                    </div>
-                    <div class="eval-card-scores">
-                      <span class="eval-score-badge" :class="getScoreClass(result.score)">
-                        {{ result.score?.toFixed(1) || '--' }}
-                      </span>
-                      <span class="eval-card-toggle">{{ result.expanded ? '▲' : '▼' }}</span>
-                    </div>
-                  </div>
-                  <div class="eval-card-body" v-if="result.expanded">
-                    <div class="eval-card-section">
-                      <h5>RAG 回答</h5>
-                      <p class="eval-answer">{{ result.answer ? escapeHtml(result.answer) : '(无回答)' }}</p>
-                    </div>
-                    <div class="eval-card-section">
-                      <h5>评估结果</h5>
-                      <div class="eval-scores-detail">
-                        <div class="eval-score-item">
-                          <span class="eval-score-label">相关性</span>
-                          <span class="eval-score-value">{{ result.relevance?.toFixed(1) || result.score?.toFixed(1) || '--' }}</span>
-                        </div>
-                        <div class="eval-score-item">
-                          <span class="eval-score-label">准确性</span>
-                          <span class="eval-score-value">{{ result.accuracy?.toFixed(1) || '--' }}</span>
-                        </div>
-                        <div class="eval-score-item">
-                          <span class="eval-score-label">完整性</span>
-                          <span class="eval-score-value">{{ result.completeness?.toFixed(1) || '--' }}</span>
-                        </div>
-                        <div class="eval-score-item">
-                          <span class="eval-score-label">综合</span>
-                          <span class="eval-score-value">{{ result.score?.toFixed(1) || '--' }}</span>
-                        </div>
-                        <div class="eval-score-item" v-if="result.evaluation_method">
-                          <span class="eval-score-label">评估方法</span>
-                          <span class="eval-score-value">{{ result.evaluation_method === 'llm' ? 'LLM评估' : '关键词评估' }}</span>
-                        </div>
-                      </div>
-                      <p class="eval-reasoning" v-if="result.reasoning">{{ escapeHtml(result.reasoning) }}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div v-else class="empty-state" style="padding: 60px;">
-              <div class="empty-state-title">暂无评估结果</div>
-              <div class="empty-state-desc">点击"开始评估"运行批量测试</div>
-            </div>
-          </div>
-        </div>
-
-      </div>
     </div>
 
     <!-- 确认弹窗 -->
@@ -330,7 +234,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { api, debounce, escapeHtml } from '../api'
+import { api, debounce } from '../api'
 
 const activeTab = ref('chunk')
 const chunkCollection = ref('operators')
@@ -534,46 +438,6 @@ const pieChartGradient = computed(() => {
   return `conic-gradient(${gradients})`
 })
 
-// Evaluation functionality
-const evalRunning = ref(false)
-const evalProgress = ref(0)
-const evalResults = ref(null)
-
-async function runEvaluation() {
-  if (evalRunning.value) return
-
-  evalRunning.value = true
-  evalProgress.value = 10
-  evalResults.value = null
-
-  try {
-    evalProgress.value = 30
-    const result = await api.runEval()
-    evalProgress.value = 90
-    if (result.results) {
-      result.results.forEach(r => r.expanded = false)
-    }
-    evalResults.value = result
-    evalProgress.value = 100
-  } catch (error) {
-    showAlert('错误', `评估出错: ${error.message}`)
-    evalRunning.value = false
-    evalProgress.value = 0
-  }
-  evalRunning.value = false
-}
-
-function getScoreClass(score) {
-  if (score === undefined || score === null) return ''
-  if (score >= 7) return 'score-high'
-  if (score >= 4) return 'score-mid'
-  return 'score-low'
-}
-
-function toggleEvalResultExpandedByResult(result) {
-  result.expanded = !result.expanded
-}
-
 // Modal state
 const showConfirmModal = ref(false)
 const showAlertModal = ref(false)
@@ -654,46 +518,6 @@ function confirmCancel() {
 .stat-sub { font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px; }
 .btn-small { padding: var(--spacing-xs) var(--spacing-sm); font-size: 0.8rem; }
 
-/* Evaluation styles */
-.panel { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: var(--radius-lg); overflow: hidden; }
-.panel-header { display: flex; justify-content: space-between; align-items: center; padding: var(--spacing-lg); border-bottom: 1px solid var(--border-color); background: var(--bg-card); }
-.panel-header h3 { font-size: 0.9rem; color: var(--text-primary); margin: 0; }
-.panel-body { padding: var(--spacing-lg); }
-.eval-progress { padding: var(--spacing-lg) 0; }
-.progress-bar { height: 8px; background: var(--bg-dark); border-radius: 4px; overflow: hidden; }
-.progress-fill { height: 100%; background: linear-gradient(90deg, var(--color-primary) 0%, var(--color-primary-dim) 100%); transition: width var(--transition-normal); }
-.eval-result-summary { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--spacing-lg); margin-bottom: var(--spacing-lg); }
-.eval-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--spacing-lg); }
-.eval-metric { text-align: center; }
-.eval-metric-value { font-family: var(--font-display); font-size: 1.5rem; color: var(--color-primary); }
-.eval-metric-label { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-top: var(--spacing-xs); }
-
-/* Eval Result Cards */
-.eval-result-cards { display: flex; flex-direction: column; gap: var(--spacing-sm); margin-top: var(--spacing-lg); }
-.eval-result-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; }
-.eval-result-card.expanded { border-color: var(--color-primary-dim); }
-.eval-card-header { display: flex; justify-content: space-between; align-items: center; padding: var(--spacing-md) var(--spacing-lg); cursor: pointer; transition: background var(--transition-fast); }
-.eval-card-header:hover { background: var(--bg-panel-hover); }
-.eval-card-summary { display: flex; align-items: center; gap: var(--spacing-md); flex: 1; min-width: 0; }
-.eval-card-id { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-dim); flex-shrink: 0; }
-.eval-card-question { font-size: 0.9rem; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.eval-card-scores { display: flex; align-items: center; gap: var(--spacing-md); flex-shrink: 0; }
-.eval-score-badge { font-family: var(--font-mono); font-size: 0.9rem; font-weight: 600; padding: var(--spacing-xs) var(--spacing-sm); border-radius: var(--radius-sm); }
-.eval-score-badge.score-high { background: rgba(0, 230, 118, 0.2); color: #00e676; }
-.eval-score-badge.score-mid { background: rgba(255, 193, 7, 0.2); color: #ffc107; }
-.eval-score-badge.score-low { background: rgba(255, 71, 87, 0.2); color: #ff4757; }
-.eval-card-toggle { font-size: 0.75rem; color: var(--text-dim); }
-.eval-card-body { border-top: 1px solid var(--border-color); padding: var(--spacing-lg); background: var(--bg-dark); }
-.eval-card-section { margin-bottom: var(--spacing-lg); }
-.eval-card-section:last-child { margin-bottom: 0; }
-.eval-card-section h5 { font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--spacing-sm); }
-.eval-answer { font-size: 0.9rem; color: var(--text-primary); line-height: 1.6; margin: 0; white-space: pre-wrap; }
-.eval-scores-detail { display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--spacing-md); margin-bottom: var(--spacing-sm); }
-.eval-score-item { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: var(--spacing-sm); text-align: center; }
-.eval-score-label { display: block; font-size: 0.7rem; color: var(--text-secondary); margin-bottom: var(--spacing-xs); }
-.eval-score-value { font-family: var(--font-mono); font-size: 1rem; font-weight: 600; color: var(--color-primary); }
-.eval-reasoning { font-size: 0.85rem; color: var(--text-secondary); font-style: italic; margin: 0; }
-
 /* Dashboard styles */
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--spacing-xl); margin-top: var(--spacing-xl); }
 .graph-stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--spacing-md); margin-bottom: var(--spacing-lg); }
@@ -768,7 +592,6 @@ function confirmCancel() {
   .stat-value { font-size: 1.2rem; }
   .stat-unit { font-size: 1.2rem; }
   .grid-2 { grid-template-columns: 1fr; }
-  .eval-scores-detail { grid-template-columns: repeat(3, 1fr); }
   .relation-section-header { flex-direction: column; align-items: flex-start; }
   .relation-section-left { flex-wrap: wrap; }
   .relation-detail-modal { width: calc(100vw - 32px) !important; }

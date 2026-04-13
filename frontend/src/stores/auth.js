@@ -43,6 +43,17 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function logout() {
     clearAuth()
+    // Clear all session/cache data
+    localStorage.removeItem('arknights_rag_sessions')
+    localStorage.removeItem('arknights_rag_last_session')
+    localStorage.removeItem('arknights_rag_backend_sessions')
+    // Reset session store to empty state
+    const { useSessionStore } = await import('./sessions')
+    const sessionStore = useSessionStore()
+    sessionStore.sessions = {}
+    sessionStore.currentSessionId = null
+    sessionStore.lastActiveSessionId = null
+    sessionStore.backendSessionIds = {}
   }
 
   async function changePassword(oldPassword, newPassword) {

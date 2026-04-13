@@ -3,7 +3,7 @@
     <div class="chat-main">
       <div class="chat-panel">
         <div class="chat-messages" ref="messagesContainer">
-          <div v-if="sessionStore.currentSession?.messages?.length === 0" class="empty-state">
+          <div v-if="!sessionStore.currentSession || sessionStore.currentSession.messages?.length === 0" class="empty-state">
             <svg class="empty-state-icon" viewBox="0 0 100 100" style="width: 48px; height: 48px;">
               <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="2"/>
               <path d="M30 50 L45 65 L70 35" fill="none" stroke="currentColor" stroke-width="3"/>
@@ -31,16 +31,24 @@
               <template v-else-if="msg.role === 'assistant'">
                 <div class="chat-bubble">
                   <div class="chat-role">Arknights RAG</div>
-                  <div class="thinking-section" v-if="msg.thinking">
-                    <div class="thinking-toggle" @click="toggleThinking(idx)">
-                      <span class="thinking-icon">{{ expandedThinking.includes(idx) ? '▼' : '▶' }}</span>
-                      <span class="thinking-label">思考过程</span>
-                    </div>
-                    <div class="thinking-content" v-if="expandedThinking.includes(idx)">{{ msg.thinking }}</div>
-                  </div>
                   <div class="chat-text">{{ escapeHtml(msg.content) }}</div>
                 </div>
                 <div class="chat-time">{{ formatTime(new Date(msg.timestamp)) }}</div>
+              </template>
+
+              <!-- Thinking display (independent, before tool calls and answer) -->
+              <template v-else-if="msg.role === 'thinking'">
+                <div class="thinking-card" @click="handleThinkingClick(idx)">
+                  <div class="thinking-card-header">
+                    <span class="thinking-card-round">Round {{ msg.round }}</span>
+                    <span class="thinking-card-label">思考过程</span>
+                    <span class="thinking-card-time" v-if="msg.time_ms">{{ formatTimeMs(msg.time_ms) }}</span>
+                  </div>
+                  <div class="thinking-card-preview" v-if="!expandedThinking.includes(idx)">
+                    {{ msg.content.length > 60 ? msg.content.substring(0, 60) + '...' : msg.content }}
+                  </div>
+                  <div class="thinking-card-content" v-if="expandedThinking.includes(idx)">{{ msg.content }}</div>
+                </div>
               </template>
 
               <!-- Tool call display -->
@@ -54,9 +62,10 @@
                     <div
                       v-for="call in msg.calls"
                       :key="call.id"
+                      :ref="el => { if (el) toolItemRefs[call.id] = el }"
                       class="tool-call-item"
                       :class="{ 'has-result': msg.results?.[call.id], 'is-expanded': expandedTools.includes(call.id) }"
-                      @click="toggleToolResult(call.id)"
+                      @click="handleToolItemClick(call.id, $event)"
                     >
                       <div class="tool-call-name-row">
                         <div class="tool-call-name">
@@ -93,9 +102,9 @@
                                   路径: <span v-for="(node, i) in msg.results[call.id].data.path" :key="i"><span class="graph-node">{{ node }}</span><span v-if="i < msg.results[call.id].data.path.length - 1" class="graph-arrow"> → </span></span>
                                 </div>
                                 <div v-for="(edge, i) in msg.results[call.id].data.edges" :key="i" class="tool-detail-graph-edge">
-                                  <span class="graph-node">{{ edge.source }}</span>
+                                  <span class="graph-node">{{ edge.from }}</span>
                                   <span class="graph-relation">--{{ edge.relation }}--></span>
-                                  <span class="graph-node">{{ edge.target }}</span>
+                                  <span class="graph-node">{{ edge.to }}</span>
                                   <div v-if="edge.description" class="graph-edge-desc">{{ edge.description }}</div>
                                 </div>
                               </template>
@@ -149,27 +158,43 @@
             </div>
           </div>
 
-          <div v-if="isLoading" class="chat-message assistant">
-            <div class="chat-bubble">
-              <div class="chat-role">Arknights RAG</div>
-              <div class="thinking-section" v-if="currentThinking">
-                <div class="thinking-toggle" @click="toggleThinking('current')">
-                  <span class="thinking-icon">{{ expandedThinking.includes('current') ? '▼' : '▶' }}</span>
-                  <span class="thinking-label">思考过程</span>
-                </div>
-                <div class="thinking-content" v-if="expandedThinking.includes('current')">{{ currentThinking }}</div>
+          <div v-if="isLoading">
+            <div class="thinking-card" v-if="currentThinking" @click="handleThinkingClick('current')">
+              <div class="thinking-card-header">
+                <span class="thinking-card-round">Round {{ currentRound }}</span>
+                <span class="thinking-card-label">思考过程</span>
+                <span class="thinking-card-time" v-if="currentThinkingTimeMs">{{ formatTimeMs(currentThinkingTimeMs) }}</span>
               </div>
-              <div class="current-answer" v-if="currentAnswer">{{ escapeHtml(currentAnswer) }}</div>
-              <div class="typing-indicator" v-if="!currentAnswer && !currentThinking">
-                <span></span><span></span><span></span>
+              <div class="thinking-card-preview" v-if="!expandedThinking.includes('current')">
+                {{ currentThinking.length > 60 ? currentThinking.substring(0, 60) + '...' : currentThinking }}
+              </div>
+              <div class="thinking-card-content" v-if="expandedThinking.includes('current')">{{ currentThinking }}</div>
+            </div>
+            <div class="chat-message assistant" v-if="currentAnswer">
+              <div class="chat-bubble">
+                <div class="chat-role">Arknights RAG</div>
+                <div class="current-answer">{{ escapeHtml(currentAnswer) }}</div>
+              </div>
+            </div>
+            <div class="chat-message assistant" v-if="!currentAnswer && !currentThinking">
+              <div class="chat-bubble">
+                <div class="chat-role">Arknights RAG</div>
+                <div class="typing-indicator">
+                  <span></span><span></span><span></span>
+                </div>
               </div>
             </div>
           </div>
 
           <!-- Pending message queue -->
           <div v-if="messageQueue.length > 0" class="pending-messages">
+            <div class="pending-header">
+              <span class="pending-badge">{{ messageQueue.length }}</span>
+              <span class="pending-label">消息队列</span>
+              <button class="pending-clear" @click="clearMessageQueue" title="清空队列">✕</button>
+            </div>
             <div v-for="(msg, idx) in messageQueue" :key="idx" class="pending-message">
-              <span class="pending-label">等待发送:</span>
+              <span class="pending-idx">{{ idx + 1 }}</span>
               <span class="pending-text">{{ msg }}</span>
             </div>
           </div>
@@ -187,12 +212,12 @@
                 @input="autoResize"
               ></textarea>
             </div>
-            <button type="submit" class="chat-submit" :disabled="isLoading">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1">
-                <path d="M22 2L11 13"/>
-                <path d="M22 2l-7 20-4-9-9-4 20-7z"/>
-              </svg>
-            </button>
+          <button type="submit" class="chat-submit" :class="{ 'is-queued': isLoading && inputText.trim() }" title="发送">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1">
+              <path d="M22 2L11 13"/>
+              <path d="M22 2l-7 20-4-9-9-4 20-7z"/>
+            </svg>
+          </button>
           </form>
 
           <div class="quick-actions">
@@ -219,12 +244,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useSessionStore } from '../stores/sessions'
 import { useQuickQuestionsStore } from '../stores/quickQuestions'
 import { useSettingsStore } from '../stores/settings'
 import { api, formatTime, escapeHtml } from '../api'
-import { generateQuickQuestions } from '../utils/quickQuestions'
 
 const sessionStore = useSessionStore()
 const quickQuestionsStore = useQuickQuestionsStore()
@@ -235,7 +259,10 @@ const isLoading = ref(false)
 const currentAnswer = ref('')
 const expandedTools = ref([])
 const expandedThinking = ref([])
+const toolItemRefs = reactive({})
 const currentThinking = ref('')
+const currentThinkingTimeMs = ref(0)
+const thinkingStartTime = ref(0)
 const messagesContainer = ref(null)
 const messageQueue = ref([])
 const abortController = ref(null)
@@ -261,13 +288,20 @@ onMounted(() => {
   nextTick(() => scrollToBottom())
 })
 
-// 组件卸载时中止所有待处理的请求
+// Component deactivated (switched to another page) — keep request running in background
+onDeactivated(() => {
+  console.log('[ChatView] deactivated, request continues in background')
+})
+
+// Component reactivated (switched back) — restore UI state
+onActivated(() => {
+  console.log('[ChatView] activated, isLoading:', isLoading.value)
+  nextTick(() => scrollToBottom())
+})
+
+// Only abort on true unmount (e.g. HMR, app destroy)
 onUnmounted(() => {
-  if (abortController.value) {
-    abortController.value.abort()
-    abortController.value = null
-    console.log('[ChatView] 组件卸载，已中止待处理请求')
-  }
+  console.log('[ChatView] unmounted')
 })
 
 // Watch for session changes to update lastResult
@@ -278,6 +312,14 @@ watch(() => sessionStore.currentSessionId, (newId, oldId) => {
   if (newId !== oldId) {
     // 如果是从null到有效ID，可能是初始加载，不中止请求
     if (oldId !== null) {
+      // Save any in-progress content before aborting
+      if (isLoading.value && currentThinking.value) {
+        const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
+        sessionStore.addThinkingMessage(currentRound, currentThinking.value, Math.round(thinkTime))
+      }
+      if (isLoading.value && currentAnswer.value) {
+        sessionStore.addMessage('assistant', currentAnswer.value)
+      }
       // 中止正在进行的请求
       if (abortController.value) {
         abortController.value.abort()
@@ -285,6 +327,8 @@ watch(() => sessionStore.currentSessionId, (newId, oldId) => {
       }
       isLoading.value = false
       currentAnswer.value = ''
+      currentThinking.value = ''
+      currentThinkingTimeMs.value = 0
     }
   }
 
@@ -299,13 +343,36 @@ watch(() => sessionStore.currentSessionId, (newId, oldId) => {
 })
 
 
+function handleThinkingClick(idx) {
+  const selection = window.getSelection()
+  // Allow expansion during streaming (idx === 'current') even with tiny selections
+  if (idx !== 'current' && selection && selection.toString().length > 3) return
+  toggleThinking(idx)
+}
+
+function handleToolItemClick(toolCallId, event) {
+  // If user selected text, don't toggle (they were trying to copy)
+  const selection = window.getSelection()
+  if (selection && selection.toString().length > 0) return
+  toggleToolResult(toolCallId)
+}
+
 function toggleToolResult(toolCallId) {
   const i = expandedTools.value.indexOf(toolCallId)
   if (i > -1) {
     expandedTools.value.splice(i, 1)
+    nextTick(() => {
+      const el = toolItemRefs[toolCallId]
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    })
   } else {
     expandedTools.value.push(toolCallId)
   }
+}
+
+function formatTimeMs(ms) {
+  if (!ms || ms <= 0) return ''
+  return `${Math.round(ms)}ms`
 }
 
 function formatToolResult(data) {
@@ -321,6 +388,32 @@ function toggleThinking(idx) {
   } else {
     expandedThinking.value.push(idx)
   }
+}
+
+/**
+ * Extract <think/> or <think ...>...</think > content from text.
+ * Some models embed reasoning inside <think/> tags in the content field.
+ * Returns { text: cleanedText, thinking: extractedThinking }
+ */
+function extractThinkContent(text) {
+  if (!text) return { text: '', thinking: '' }
+  let thinking = ''
+  let cleaned = text
+  // Match <think ...>...</think > (including self-closing <think/>)
+  // Use global regex to handle multiple think blocks
+  const thinkRegex = /<think[^>]*>([\s\S]*?)<\/think\s*>/gi
+  let match
+  while ((match = thinkRegex.exec(text)) !== null) {
+    thinking += match[1].trim()
+  }
+  cleaned = text.replace(thinkRegex, '').trim()
+  // Also handle self-closing <think/> or <think /> with no content
+  cleaned = cleaned.replace(/<think\s*\/>/gi, '').trim()
+  return { text: cleaned, thinking }
+}
+
+function clearMessageQueue() {
+  messageQueue.value = []
 }
 
 function autoResize(e) {
@@ -342,7 +435,7 @@ async function sendMessage() {
 
   // If already loading, add to queue (max 2 messages)
   if (isLoading.value) {
-    if (messageQueue.value.length < 2) {
+    if (messageQueue.value.length < 20) {
       messageQueue.value.push(content)
     }
     return
@@ -354,6 +447,8 @@ async function sendMessage() {
   expandedTools.value = []
   expandedThinking.value = []
   currentThinking.value = ''
+  currentThinkingTimeMs.value = 0
+  thinkingStartTime.value = 0
 
   sessionStore.addMessage('user', content)
   nextTick(() => scrollToBottom())
@@ -403,7 +498,24 @@ async function sendMessage() {
         }
       },
 
+      onThinkingStart(event) {
+        currentRound = event.round || currentRound + 1
+        currentThinking.value = ''
+        currentThinkingTimeMs.value = 0
+        thinkingStartTime.value = event.timestamp_ms || Date.now()
+        nextTick(() => scrollToBottom())
+      },
+
       onToolCallsStart(event) {
+        // Save any accumulated thinking content as a thinking message
+        if (currentThinking.value) {
+          const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
+          sessionStore.addThinkingMessage(currentRound, currentThinking.value, Math.round(thinkTime))
+          currentThinking.value = ''
+          currentThinkingTimeMs.value = 0
+        }
+        // Discard any stray answer content (tool round doesn't produce final answer)
+        currentAnswer.value = ''
         currentRound = event.round || currentRound + 1
         const calls = event.tool_calls.map(tc => ({
           id: tc.id,
@@ -412,6 +524,12 @@ async function sendMessage() {
         }))
         sessionStore.addToolCallMessage(calls, currentRound)
         currentToolCallMsg = calls
+        nextTick(() => scrollToBottom())
+      },
+
+      onToolExecuting(event) {
+        // A tool has started executing — update UI to show progress
+        // This helps when tool_calls_start and tool_call_result arrive too close together
         nextTick(() => scrollToBottom())
       },
 
@@ -426,21 +544,38 @@ async function sendMessage() {
       },
 
       onAnswerDelta(event) {
-        currentAnswer.value += event.delta || ''
+        const delta = event.delta || ''
+        // Backend already parses <think/> tags, so content_delta is pure answer text
+        currentAnswer.value += delta
         nextTick(() => scrollToBottom())
       },
 
       onThinkingDelta(event) {
         currentThinking.value += event.content || ''
+        if (thinkingStartTime.value) {
+          currentThinkingTimeMs.value = Date.now() - thinkingStartTime.value
+        }
         nextTick(() => scrollToBottom())
       },
 
       onAnswerDone(event) {
+        const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
+        // Save thinking as independent message if present
+        if (currentThinking.value) {
+          sessionStore.addThinkingMessage(currentRound, currentThinking.value, Math.round(thinkTime))
+        }
+        // Filter <think/> tags from the final answer
+        const rawAnswer = event.answer || currentAnswer.value
+        const { text: cleanAnswer, thinking: trailingThinking } = extractThinkContent(rawAnswer)
+        if (trailingThinking && !currentThinking.value) {
+          sessionStore.addThinkingMessage(currentRound, trailingThinking)
+        }
         // Finalize: add complete answer as assistant message
-        const answer = event.answer || currentAnswer.value
-        sessionStore.addMessage('assistant', answer, currentThinking.value ? { thinking: currentThinking.value } : {})
+        sessionStore.addMessage('assistant', cleanAnswer)
         currentAnswer.value = ''
         currentThinking.value = ''
+        currentThinkingTimeMs.value = 0
+        thinkingStartTime.value = 0
       },
 
       onError(event) {
@@ -449,20 +584,29 @@ async function sendMessage() {
       },
     })
   } catch (error) {
-    // Save partial answer before clearing
+    // Save partial thinking and answer before clearing
+    const partialThinking = currentThinking.value
     const partialAnswer = currentAnswer.value
 
     isLoading.value = false
-    currentAnswer.value = ''
+    currentThinking.value = ''
+    currentThinkingTimeMs.value = 0
 
     if (error.name === 'AbortError') {
       console.log('[ChatView] Request aborted')
+      if (partialThinking) {
+        const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
+        sessionStore.addThinkingMessage(currentRound, partialThinking, Math.round(thinkTime))
+      }
       if (partialAnswer) {
         sessionStore.addMessage('assistant', partialAnswer)
       }
     } else {
       console.error('[ChatView] Agent chat error:', error)
-      sessionStore.addMessage('assistant', `错误: ${error.message}`)
+      if (partialThinking) {
+        sessionStore.addThinkingMessage(currentRound, partialThinking, 0)
+      }
+      sessionStore.addMessage('assistant', partialAnswer || `错误: ${error.message}`)
     }
   }
 
@@ -520,88 +664,56 @@ async function loadQuickQuestionsData() {
 
   quickQuestionsStore.setLoading(true);
   try {
-    console.log('正在加载快速问题数据...');
-
-    // 并行获取所有数据
-    const [operatorsRes, charactersRes, storiesRes] = await Promise.allSettled([
-      api.getOperators(),
-      api.getCharacters(),
-      api.getStories()
-    ]);
-
-    const data = {};
-
-    // 处理operators
-    if (operatorsRes.status === 'fulfilled') {
-      data.operators = operatorsRes.value.operators || [];
-      console.log(`已加载 ${data.operators.length} 个干员`);
+    console.log('正在从后端加载快速问题...');
+    const res = await api.getQuickQuestions();
+    const questions = res.questions || [];
+    if (questions.length > 0) {
+      quickQuestionsStore.setQuickActions(questions);
+      console.log('快速问题加载完成:', questions);
     } else {
-      console.error('获取干员数据失败:', operatorsRes.reason);
-      data.operators = [];
+      throw new Error('Empty questions');
     }
-
-    // 处理characters
-    if (charactersRes.status === 'fulfilled') {
-      data.characters = charactersRes.value.characters || [];
-      console.log(`已加载 ${data.characters.length} 个角色`);
-    } else {
-      console.error('获取角色数据失败:', charactersRes.reason);
-      data.characters = data.operators; // 回退到干员数据
-    }
-
-    // 处理stories
-    if (storiesRes.status === 'fulfilled') {
-      data.stories = storiesRes.value.stories || [];
-      console.log(`已加载 ${data.stories.length} 个故事`);
-    } else {
-      console.error('获取故事数据失败:', storiesRes.reason);
-      data.stories = [];
-    }
-
-    quickQuestionsStore.setQuickQuestionsData(data);
-    console.log('快速问题数据加载完成:', data);
   } catch (error) {
-    console.error('加载快速问题数据失败:', error);
+    console.error('加载快速问题失败:', error);
+    // fallback
+    const fallbackActions = [
+      { label: '银灰技能', question: '银灰的技能是什么？', type: 'skill' },
+      { label: '陈/史尔特尔', question: '陈和史尔特尔的关系', type: 'relation' },
+      { label: '伊芙利特背景', question: '伊芙利特背景故事', type: 'background' },
+      { label: '靶向药物故事', question: '靶向药物故事内容', type: 'story' },
+      { label: '阿米娅别名', question: '阿米娅别名有什么', type: 'alias' }
+    ];
+    quickQuestionsStore.setQuickActions(fallbackActions);
   } finally {
-    // 无论API成功还是失败，都生成快速问题
-    refreshQuickActions();
     quickQuestionsStore.setLoading(false);
   }
 }
 
-function refreshQuickActions() {
-  console.log('[ChatView] refreshQuickActions called, hasInitialized:', quickQuestionsStore.hasInitialized)
+async function refreshQuickActions() {
+  console.log('[ChatView] refreshQuickActions called')
   // 添加旋转动画效果
   const refreshIcon = document.querySelector('.refresh-icon');
   if (refreshIcon) {
     refreshIcon.classList.remove('rotating');
-    // 强制重排以重置动画
     void refreshIcon.offsetWidth;
     refreshIcon.classList.add('rotating');
-
-    // 动画结束后移除类
     setTimeout(() => {
       refreshIcon.classList.remove('rotating');
     }, 600);
   }
 
   try {
-    const data = quickQuestionsStore.quickQuestionsData;
-    const options = { shuffle: false };
-
-    if (data) {
-      options.data = data;
-      console.log('使用API数据生成快速问题');
+    const res = await api.getQuickQuestions();
+    const questions = res.questions || [];
+    if (questions.length > 0) {
+      quickQuestionsStore.setQuickActions(questions);
+      console.log('快速问题已刷新:', questions);
     } else {
-      console.log('使用示例数据生成快速问题');
+      throw new Error('Empty questions');
     }
-
-    const newActions = generateQuickQuestions(options);
-    quickQuestionsStore.setQuickActions(newActions);
-    console.log('快速问题已刷新:', newActions);
   } catch (error) {
     console.error('刷新快速问题失败:', error);
-    // 如果生成失败，使用备用的静态问题
+    // fallback
     const fallbackActions = [
       { label: '银灰技能', question: '银灰的技能是什么？', type: 'skill' },
       { label: '陈/史尔特尔', question: '陈和史尔特尔的关系', type: 'relation' },
@@ -613,10 +725,15 @@ function refreshQuickActions() {
   }
 }
 
+let _scrollRafId = null
 function scrollToBottom() {
-  if (messagesContainer.value) {
-    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-  }
+  if (_scrollRafId !== null) return
+  _scrollRafId = requestAnimationFrame(() => {
+    _scrollRafId = null
+    if (messagesContainer.value) {
+      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+    }
+  })
 }
 </script>
 
@@ -633,6 +750,8 @@ function scrollToBottom() {
 .chat-submit:hover { transform: scale(1.05); box-shadow: 0 0 20px var(--color-primary-glow); }
 .chat-submit:active { transform: scale(0.95); }
 .chat-submit:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.chat-submit.is-queued { opacity: 1; cursor: pointer; }
+.chat-submit.is-queued:hover { transform: scale(1.05); box-shadow: 0 0 20px var(--color-primary-glow); }
 
 
 /* Mobile: hide sidebar, full-screen chat */
@@ -685,13 +804,15 @@ function scrollToBottom() {
 .chat-role { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: var(--spacing-xs); opacity: 0.7; }
 .chat-text { line-height: 1.6; white-space: pre-wrap; }
 .chat-time { font-size: 0.7rem; opacity: 0.5; margin-top: var(--spacing-xs); text-align: right; }
-/* Thinking content */
-.thinking-section { margin-bottom: var(--spacing-sm); }
-.thinking-toggle { display: flex; align-items: center; gap: var(--spacing-xs); cursor: pointer; padding: 2px 0; }
-.thinking-toggle:hover { opacity: 0.8; }
-.thinking-icon { font-size: 0.6rem; color: var(--text-dim); }
-.thinking-label { font-size: 0.7rem; color: var(--text-dim); font-style: italic; }
-.thinking-content { font-size: 0.75rem; color: var(--text-dim); background: var(--bg-dark); border: 1px dashed var(--border-color); border-radius: var(--radius-sm); padding: var(--spacing-sm); margin-top: var(--spacing-xs); max-height: 200px; overflow-y: auto; white-space: pre-wrap; line-height: 1.5; }
+/* Thinking card (clickable whole card to expand/collapse) */
+.thinking-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--spacing-sm) var(--spacing-md); max-width: 85%; margin-bottom: var(--spacing-md); animation: fadeSlideIn 0.3s ease-out; margin-right: auto; cursor: pointer; user-select: none; transition: border-color var(--transition-fast); }
+.thinking-card:hover { border-color: var(--color-primary-dim); }
+.thinking-card-header { display: flex; align-items: center; gap: var(--spacing-sm); }
+.thinking-card-round { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); }
+.thinking-card-label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); font-style: italic; }
+.thinking-card-time { margin-left: auto; font-size: 0.65rem; color: var(--text-dim); font-family: var(--font-mono); }
+.thinking-card-preview { font-size: 0.72rem; color: var(--text-dim); padding: var(--spacing-xs) 0 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.thinking-card-content { font-size: 0.75rem; color: var(--text-dim); background: var(--bg-dark); border: 1px dashed var(--border-color); border-radius: var(--radius-sm); padding: var(--spacing-sm); margin-top: var(--spacing-xs); max-height: 200px; overflow-y: auto; white-space: pre-wrap; line-height: 1.5; word-break: break-word; cursor: text; user-select: text; }
 .typing-indicator { display: flex; gap: 4px; padding: var(--spacing-md); }
 .typing-indicator span { width: 8px; height: 8px; background: var(--text-secondary); border-radius: 50%; animation: typingBounce 1.4s infinite ease-in-out; }
 .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
@@ -701,10 +822,15 @@ function scrollToBottom() {
 .current-answer { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes rotate360 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-.pending-messages { display: flex; flex-direction: column; gap: var(--spacing-sm); padding: var(--spacing-md); }
-.pending-message { display: flex; align-items: center; gap: var(--spacing-sm); padding: var(--spacing-sm) var(--spacing-md); background: var(--bg-panel); border: 1px dashed var(--border-color); border-radius: var(--radius-md); font-size: 0.85rem; opacity: 0.7; }
-.pending-label { color: var(--text-dim); font-size: 0.75rem; flex-shrink: 0; }
-.pending-text { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pending-messages { display: flex; flex-direction: column; gap: var(--spacing-xs); padding: var(--spacing-sm) var(--spacing-md); background: var(--bg-panel); border: 1px dashed var(--border-color); border-radius: var(--radius-md); margin-bottom: var(--spacing-md); }
+.pending-header { display: flex; align-items: center; gap: var(--spacing-sm); padding-bottom: var(--spacing-xs); border-bottom: 1px solid var(--border-color); margin-bottom: 2px; }
+.pending-badge { font-size: 0.65rem; font-weight: 700; color: var(--color-primary); background: var(--bg-dark); border: 1px solid var(--color-primary-dim); border-radius: 8px; padding: 0 6px; line-height: 18px; }
+.pending-label { font-size: 0.75rem; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; flex: 1; }
+.pending-clear { background: none; border: none; color: var(--text-dim); font-size: 0.7rem; cursor: pointer; padding: 2px 6px; border-radius: 4px; transition: color var(--transition-fast); }
+.pending-clear:hover { color: var(--text-secondary); }
+.pending-message { display: flex; align-items: center; gap: var(--spacing-sm); padding: var(--spacing-xs) var(--spacing-sm); border-radius: var(--radius-sm); background: var(--bg-dark); }
+.pending-idx { font-size: 0.65rem; color: var(--text-dim); font-weight: 600; min-width: 16px; font-family: var(--font-mono); opacity: 0.6; }
+.pending-text { font-size: 0.82rem; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .quick-action { padding: var(--spacing-xs) var(--spacing-md); background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: var(--radius-lg); color: var(--text-secondary); font-size: 0.8rem; cursor: pointer; transition: all var(--transition-fast); }
 .quick-action:hover { border-color: var(--color-primary-dim); color: var(--color-primary); }
 .quick-action.refresh:hover { border-color: var(--color-primary); }
@@ -717,23 +843,22 @@ function scrollToBottom() {
 /* Tool call display */
 .tool-call-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--spacing-md); max-width: 85%; margin-bottom: var(--spacing-md); animation: fadeSlideIn 0.3s ease-out; margin-right: auto; }
 .tool-call-header { display: flex; align-items: center; gap: var(--spacing-sm); margin-bottom: var(--spacing-sm); }
-.tool-call-round { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.7; }
-.tool-call-count { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.7; }
+.tool-call-round { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); }
+.tool-call-count { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); }
 .tool-call-list { display: flex; flex-direction: column; gap: var(--spacing-xs); }
 .tool-call-item { display: flex; flex-direction: column; gap: 2px; padding: var(--spacing-xs) var(--spacing-sm); background: var(--bg-panel); border-radius: var(--radius-sm); border-left: 3px solid var(--text-dim); transition: border-color var(--transition-fast); cursor: pointer; position: relative; }
 .tool-call-item.has-result { border-left-color: var(--color-primary); }
 .tool-call-name-row { display: flex; justify-content: space-between; align-items: center; gap: var(--spacing-sm); }
-.tool-call-name-row:hover { opacity: 0.85; }
-.tool-call-name { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.7; display: flex; align-items: center; gap: var(--spacing-xs); flex-shrink: 0; }
+.tool-call-name { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); display: flex; align-items: center; gap: var(--spacing-xs); flex-shrink: 0; }
 .tool-icon { font-size: 0.85rem; }
 .tool-call-meta { display: flex; align-items: center; gap: var(--spacing-sm); flex-wrap: wrap; justify-content: flex-end; }
-.tool-call-args { font-size: 0.7rem; color: var(--text-secondary); }
+.tool-call-args { font-size: 0.7rem; color: var(--text-dim); }
 .tool-result-time { font-size: 0.65rem; color: var(--text-dim); font-family: var(--font-mono); flex-shrink: 0; }
-.tool-result-summary { font-size: 0.7rem; opacity: 0.7; padding-left: 22px; }
-.tool-result-detail { padding: var(--spacing-sm) 0 0 22px; position: relative; }
+.tool-result-summary { font-size: 0.7rem; color: var(--text-dim); padding-left: 22px; }
+.tool-result-detail { padding: var(--spacing-sm) 0 0 22px; position: relative; cursor: text; user-select: text; }
 .tool-result-detail pre { background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: var(--spacing-sm); font-size: 0.7rem; color: var(--text-secondary); overflow-x: auto; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow-y: auto; margin: 0; }
 .tool-call-pending { font-size: 0.7rem; color: var(--text-dim); padding-left: 22px; display: flex; align-items: center; gap: 4px; }
-.pending-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-primary); animation: pendingPulse 1s infinite ease-in-out; }
+.pending-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim); animation: pendingPulse 1s infinite ease-in-out; }
 @keyframes pendingPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
 
 /* Tool detail expanded content */
@@ -745,7 +870,7 @@ function scrollToBottom() {
 /* RAG search docs */
 .tool-detail-doc { background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: var(--spacing-sm); }
 .tool-detail-doc-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-xs); }
-.tool-detail-doc-source { font-size: 0.7rem; color: var(--color-primary); font-weight: 500; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-detail-doc-source { font-size: 0.7rem; color: var(--text-secondary); font-weight: 500; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-detail-doc-score { font-size: 0.65rem; color: var(--text-dim); font-family: var(--font-mono); background: var(--bg-panel); padding: 1px 6px; border-radius: 4px; }
 .tool-detail-doc-content { font-size: 0.72rem; color: var(--text-secondary); line-height: 1.5; max-height: 160px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
 
@@ -753,17 +878,17 @@ function scrollToBottom() {
 .tool-detail-graph { display: flex; flex-direction: column; gap: var(--spacing-sm); }
 .tool-detail-graph-path { font-size: 0.75rem; color: var(--text-secondary); padding: var(--spacing-xs) var(--spacing-sm); background: var(--bg-dark); border-radius: var(--radius-sm); }
 .tool-detail-graph-edge { font-size: 0.72rem; color: var(--text-secondary); padding: var(--spacing-xs) var(--spacing-sm); background: var(--bg-dark); border-radius: var(--radius-sm); }
-.graph-node { color: var(--color-primary); font-weight: 500; }
-.graph-relation { color: var(--text-dim); font-style: italic; margin: 0 4px; }
-.graph-arrow { color: var(--text-dim); margin: 0 2px; }
-.graph-edge-desc { font-size: 0.65rem; color: var(--text-dim); margin-top: 2px; padding-left: 8px; font-style: italic; }
+.graph-node { color: var(--text-primary); font-weight: 500; }
+.graph-relation { color: var(--text-secondary); font-style: italic; margin: 0 4px; }
+.graph-arrow { color: var(--text-secondary); margin: 0 2px; }
+.graph-edge-desc { font-size: 0.65rem; color: var(--text-secondary); margin-top: 2px; padding-left: 8px; font-style: italic; }
 .graph-direction-label { font-size: 0.7rem; color: var(--text-dim); font-weight: 500; margin-top: var(--spacing-xs); padding: 2px 0; }
-.tool-detail-graph-entity { font-size: 0.75rem; color: var(--color-primary); font-weight: 500; margin-bottom: var(--spacing-xs); }
+.tool-detail-graph-entity { font-size: 0.75rem; color: var(--text-primary); font-weight: 500; margin-bottom: var(--spacing-xs); }
 
 /* Web search results */
 .tool-detail-web { background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: var(--spacing-sm); }
 .tool-detail-web-title { font-size: 0.78rem; margin-bottom: var(--spacing-xs); }
-.tool-detail-web-title a { color: var(--color-primary); text-decoration: none; font-weight: 500; }
+.tool-detail-web-title a { color: var(--text-secondary); text-decoration: none; font-weight: 500; }
 .tool-detail-web-title a:hover { text-decoration: underline; }
 .tool-detail-web-content { font-size: 0.72rem; color: var(--text-secondary); line-height: 1.5; max-height: 120px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
 </style>

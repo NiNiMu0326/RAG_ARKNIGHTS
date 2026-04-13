@@ -5,7 +5,7 @@
 
 
     <!-- Edge Info Panel -->
-    <div class="kg-edge-info" :class="{ active: selectedEdge }">
+    <div class="kg-edge-info" :class="{ active: selectedEdge, 'is-hovered': edgeInfoHovered }" ref="edgeInfoEl">
       <div class="kg-edge-info-header">
         <span class="kg-edge-info-title">关系详情</span>
         <button class="kg-edge-info-close" @click="selectedEdge = null">X</button>
@@ -63,6 +63,8 @@ const controller = useGraphController()
 const graphContainer = ref(null)
 const zoomLevel = ref(100)
 const selectedEdge = ref(null)
+const edgeInfoHovered = ref(false)
+const edgeInfoEl = ref(null)
 
 let cy = null
 
@@ -387,14 +389,28 @@ function fitView() {
   }
 }
 
+// ============ Edge info hover detection ============
+function onMouseMove(e) {
+  if (!edgeInfoEl.value || !selectedEdge.value) {
+    edgeInfoHovered.value = false
+    return
+  }
+  const rect = edgeInfoEl.value.getBoundingClientRect()
+  const inside = e.clientX >= rect.left && e.clientX <= rect.right &&
+                 e.clientY >= rect.top && e.clientY <= rect.bottom
+  edgeInfoHovered.value = inside
+}
+
 // ============ Lifecycle ============
 onMounted(async () => {
   initGraph()
   await controller.loadGraphData()
   updateGraph()
+  document.addEventListener('mousemove', onMouseMove)
 })
 
 onUnmounted(() => {
+  document.removeEventListener('mousemove', onMouseMove)
   if (cy) {
     cy.destroy()
     cy = null
@@ -493,7 +509,7 @@ watch(() => controller.hoveredRelation.value, applyEdgeHoverStyles)
   position: absolute;
   top: var(--spacing-lg);
   left: var(--spacing-lg);
-  width: 280px;
+  width: 187px;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -503,12 +519,24 @@ watch(() => controller.hoveredRelation.value, applyEdgeHoverStyles)
   transform: translateY(-10px);
   transition: all var(--transition-normal);
   z-index: 50;
+  pointer-events: none;
 }
 
 .kg-edge-info.active {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
+  pointer-events: none;
+  transition: all var(--transition-normal);
+}
+
+.kg-edge-info.active.is-hovered {
+  opacity: 0.4;
+}
+
+/* Only close button is clickable, everything else click-through to graph */
+.kg-edge-info .kg-edge-info-close {
+  pointer-events: auto;
 }
 
 .kg-edge-info-header {
