@@ -148,20 +148,15 @@ async def execute_graphrag_search(arguments: Dict[str, Any]) -> Dict:
 
 
 async def execute_web_search(arguments: Dict[str, Any]) -> List[Dict]:
-    """Execute web_search tool using SiliconFlow/Tavily."""
+    """Execute web_search tool using Tavily + DuckDuckGo."""
     query = arguments.get("query", "")
     if not query:
         return [{"error": "query parameter is required"}]
 
     try:
-        from backend.api.siliconflow import SiliconFlowClient
-        from backend import config
+        from backend.api.web_search import search as web_search
 
-        client = SiliconFlowClient(
-            api_key=config.SILICONFLOW_API_KEY,
-            tavily_api_key=config.TAVILY_API_KEY,
-        )
-        results = client.search(query, limit=5)
+        results = web_search(query, limit=5)
 
         if not results:
             return [{"message": "未找到相关网络搜索结果", "query": query}]

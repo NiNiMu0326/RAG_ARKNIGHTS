@@ -94,7 +94,7 @@
 
 ## 环境变量（`backend/.env`）
 
-- `SILICONFLOW_API_KEY` - 必需（嵌入 + 重排 + 搜索）
+- `SILICONFLOW_API_KEY` - 必需（嵌入 + 重排 + LLM）
 - `DEEPSEEK_API_KEY_2` - 可选（DeepSeek 官方模型）
 - `TAVILY_API_KEY` - 可选（网络搜索补充）
 - `MINIMAX_API_KEY` - 可选（MiniMax 模型）

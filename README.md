@@ -38,7 +38,7 @@ cp .env.example .env
 ```
 
 必需环境变量：
-- `SILICONFLOW_API_KEY` - 向量嵌入 + 重排 + 网络搜索（[siliconflow.cn](https://siliconflow.cn)）
+- `SILICONFLOW_API_KEY` - 向量嵌入 + 重排（[siliconflow.cn](https://siliconflow.cn)）
 
 可选：
 - `DEEPSEEK_API_KEY_2` - DeepSeek 官方模型（不填则默认使用硅基流动）
