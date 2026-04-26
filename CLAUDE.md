@@ -59,7 +59,7 @@
 ### 会话管理（`backend/agent/sessions.py`）
 
 - TTL 3600 秒，最大 1000 会话，LRU 驱逐
-- 线程安全（threading.Lock）
+- 线程安全（asyncio.Lock）
 - 前端 Pinia sessions store 同步管理，支持 localStorage + 服务端双重持久化
 
 ## 文件清单
@@ -143,7 +143,6 @@
 | `auth.js` | JWT token 管理、用户状态、登录/注册/登出 |
 | `settings.js` | 主题切换、模型选择、设置持久化 |
 | `quickQuestions.js` | 快捷问题缓存 |
-| `graph.js` | 图谱状态（备用实现） |
 | `toast.js` | 通知消息 |
 
 **其他：**
@@ -151,8 +150,6 @@
 |------|------|
 | `api.js` | API 客户端：所有后端接口封装，含 `agentChat()` SSE 流式调用 |
 | `composables/useGraphController.js` | 图谱控制器单例，GraphView 和 AppSidebar 共享 |
-| `utils/quickQuestions.js` | 快捷问题生成引擎（5 种模板类型） |
-| `utils/dataLoader.js` | 数据加载工具（占位，实际使用 API） |
 | `assets/styles.css` | 全局样式（CSS 变量、双主题、组件样式） |
 | `assets/graphrag.css` | 知识图谱专用样式 |
 
