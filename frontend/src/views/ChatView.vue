@@ -223,7 +223,7 @@
           <div class="quick-actions">
             <button
               v-for="(action, idx) in quickQuestionsStore.quickActions"
-              :key="`${msg.role || 'pending'}-${idx}`"
+              :key="`qa-${idx}`"
               class="quick-action"
               @click="inputText = action.question"
               :title="action.question"
