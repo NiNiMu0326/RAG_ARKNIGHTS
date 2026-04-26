@@ -5,7 +5,7 @@
 ## 功能特性
 
 - **AI Agent 自主决策**：LLM 通过 Function Calling 自主选择工具、并行执行、判断信息充足性，最多 8 轮工具调用
-- **多 LLM 模型支持**：DeepSeek-V3.2（硅基流动/官方）、MiniMax-M2.5/M2.7，通过 llm\_factory 统一调度
+- **多 LLM 模型支持**：DeepSeek-V4-Flash、MiniMax-M2.5/M2.7，通过 llm\_factory 统一调度
 - **知识库检索**：FAISS 向量 + BM25 关键词混合检索 → RRF 融合 → Cross-Encoder 重排 → Parent Document 扩展
 - **知识图谱查询（GraphRAG）**：NetworkX 有向图，支持单实体邻居查询和双实体最短路径查找
 - **网络搜索**：Tavily API + DuckDuckGo 兜底，补充外部实时信息
@@ -38,7 +38,8 @@ cp .env.example .env
 
 必需环境变量：
 
-- `SILICONFLOW_API_KEY` - 向量嵌入 + 重排（[siliconflow.cn](https://siliconflow.cn)）
+- `SILICONFLOW_API_KEY` - 向量嵌入 + 重排 + 默认 LLM（[siliconflow.cn](https://siliconflow.cn)）
+- `JWT_SECRET` - JWT 签名密钥，生成方式：`python -c "import secrets; print(secrets.token_hex(32))"`
 
 可选：
 

@@ -212,6 +212,7 @@
 | 变量 | 必须 | 说明 |
 |------|------|------|
 | `SILICONFLOW_API_KEY` | 是 | 嵌入（bge-m3）+ 重排（bge-reranker-v2-m3）+ 默认 LLM |
+| `JWT_SECRET` | 是 | JWT 签名密钥，不设置则服务拒绝启动 |
 | `DEEPSEEK_API_KEY_2` | 否 | DeepSeek 官方模型 API Key |
 | `TAVILY_API_KEY` | 否 | Tavily 网络搜索，不填则 DuckDuckGo 兜底 |
 | `MINIMAX_API_KEY` | 否 | MiniMax M2.5/M2.7 模型 |

@@ -21,6 +21,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 import uvicorn
 
+from backend import config  # 必须在 auth 之前导入，以加载 .env
+
 from backend.db import get_db, init_db
 from backend.auth import (
     validate_account, validate_username, validate_password,
@@ -35,8 +37,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("arknights_rag")
 
-# Import config
-from backend import config
 from backend.config import (
     BASE_DIR, CHUNKS_DIR, DATA_DIR,
     ENTITY_RELATIONS_FILE,
