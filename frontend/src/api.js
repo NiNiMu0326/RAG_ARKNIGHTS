@@ -256,32 +256,7 @@ export const api = {
 
         try {
           const event = JSON.parse(jsonStr)
-          switch (event.type) {
-            case 'thinking_start':
-              onThinkingStart?.(event)
-              break
-            case 'tool_calls_start':
-              onToolCallsStart?.(event)
-              break
-            case 'tool_executing':
-              onToolExecuting?.(event)
-              break
-            case 'tool_call_result':
-              onToolCallResult?.(event)
-              break
-            case 'thinking_delta':
-              onThinkingDelta?.(event)
-              break
-            case 'answer_delta':
-              onAnswerDelta?.(event)
-              break
-            case 'answer_done':
-              onAnswerDone?.(event)
-              break
-            case 'error':
-              onError?.(event)
-              break
-          }
+          _dispatchSSEEvent(event, { onThinkingStart, onToolCallsStart, onToolExecuting, onToolCallResult, onThinkingDelta, onAnswerDelta, onAnswerDone, onError })
         } catch (e) {
           console.warn('Failed to parse SSE event:', jsonStr, e)
         }
@@ -294,21 +269,25 @@ export const api = {
       if (jsonStr) {
         try {
           const event = JSON.parse(jsonStr)
-          switch (event.type) {
-            case 'thinking_start': onThinkingStart?.(event); break
-            case 'tool_calls_start': onToolCallsStart?.(event); break
-            case 'tool_executing': onToolExecuting?.(event); break
-            case 'tool_call_result': onToolCallResult?.(event); break
-            case 'thinking_delta': onThinkingDelta?.(event); break
-            case 'answer_delta': onAnswerDelta?.(event); break
-            case 'answer_done': onAnswerDone?.(event); break
-            case 'error': onError?.(event); break
-          }
+        _dispatchSSEEvent(event, { onThinkingStart, onToolCallsStart, onToolExecuting, onToolCallResult, onThinkingDelta, onAnswerDelta, onAnswerDone, onError })
         } catch (e) {
           console.warn('Failed to parse final SSE event:', jsonStr, e)
         }
       }
     }
+  }
+}
+
+function _dispatchSSEEvent(event, callbacks) {
+  switch (event.type) {
+    case 'thinking_start': callbacks.onThinkingStart?.(event); break
+    case 'tool_calls_start': callbacks.onToolCallsStart?.(event); break
+    case 'tool_executing': callbacks.onToolExecuting?.(event); break
+    case 'tool_call_result': callbacks.onToolCallResult?.(event); break
+    case 'thinking_delta': callbacks.onThinkingDelta?.(event); break
+    case 'answer_delta': callbacks.onAnswerDelta?.(event); break
+    case 'answer_done': callbacks.onAnswerDone?.(event); break
+    case 'error': callbacks.onError?.(event); break
   }
 }
 
@@ -335,7 +314,3 @@ export function escapeHtml(str) {
   return div.innerHTML
 }
 
-export function truncate(str, len = 100) {
-  if (str.length <= len) return str
-  return str.slice(0, len) + '...'
-}

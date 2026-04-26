@@ -42,8 +42,8 @@ def build_operators():
 def build_stories():
     """Build GraphRAG from story files (extracts key persons + relations)."""
     extractor = EntityExtractor()
-    output_path = SCRIPT_DIR / 'chunks' / 'graphrag' / 'entity_relations.json'
-    stories_dir = SCRIPT_DIR.parent / 'data' / 'stories'
+    output_path = config.ENTITY_RELATIONS_FILE
+    stories_dir = config.DATA_DIR / 'stories'
     
     print(f"=== Extracting from stories ===")
     print(f"Input: {stories_dir}")
@@ -59,9 +59,9 @@ def build_stories():
 def build_all():
     """Build GraphRAG from both operators and stories."""
     extractor = EntityExtractor()
-    output_path = SCRIPT_DIR / 'chunks' / 'graphrag' / 'entity_relations.json'
-    operators_dir = SCRIPT_DIR.parent / 'data' / 'operators'
-    stories_dir = SCRIPT_DIR.parent / 'data' / 'stories'
+    output_path = config.ENTITY_RELATIONS_FILE
+    operators_dir = config.DATA_DIR / 'operators'
+    stories_dir = config.DATA_DIR / 'stories'
     
     print("=== Extracting from operators ===")
     print(f"Input: {operators_dir}")

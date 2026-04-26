@@ -29,9 +29,7 @@ async def execute_rag_search(arguments: Dict[str, Any]) -> List[Dict]:
         from backend.lc.embeddings import SiliconFlowEmbeddings
         from backend.lc.reranker import SiliconFlowReranker
         from backend.rag.parent_document import ParentDocumentRetriever
-        from backend.data.bm25_index import BM25Indexer
         from backend import config
-        from pathlib import Path
 
         # Load BM25 indexes (lazy, cached)
         bm25_indexes = _get_bm25_indexes()
@@ -98,9 +96,9 @@ async def execute_graphrag_search(arguments: Dict[str, Any]) -> Dict:
     entity2 = arguments.get("entity2", "")
 
     try:
-        from backend.rag.graphrag.builder import GraphBuilder
+        from backend.rag.graphrag.query import get_graph_builder
 
-        builder = _get_graph_builder()
+        builder = get_graph_builder()
         if builder is None or builder.graph is None:
             return {"error": "知识图谱未加载，关系查询不可用"}
 
@@ -181,8 +179,6 @@ async def execute_web_search(arguments: Dict[str, Any]) -> List[Dict]:
 
 _bm25_indexes = None
 _bm25_lock = None
-_graph_builder = None
-_graph_lock = None
 
 
 def _get_bm25_indexes():
@@ -216,30 +212,3 @@ def _get_bm25_indexes():
 
         _bm25_indexes = indexes
         return _bm25_indexes
-
-
-def _get_graph_builder():
-    """Lazy-load GraphBuilder singleton."""
-    global _graph_builder, _graph_lock
-    import threading
-    if _graph_lock is None:
-        _graph_lock = threading.Lock()
-
-    if _graph_builder is not None:
-        return _graph_builder
-
-    with _graph_lock:
-        if _graph_builder is not None:
-            return _graph_builder
-
-        from backend.rag.graphrag.builder import GraphBuilder
-        builder = GraphBuilder()
-        try:
-            builder.build()
-        except FileNotFoundError:
-            logger.warning("GraphRAG entity_relations.json not found")
-        except Exception as e:
-            logger.warning(f"Failed to build graph: {e}")
-
-        _graph_builder = builder
-        return _graph_builder

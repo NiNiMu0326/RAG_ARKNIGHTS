@@ -36,12 +36,11 @@ logging.basicConfig(
 logger = logging.getLogger("arknights_rag")
 
 # Import config
+from backend import config
 from backend.config import (
     BASE_DIR, CHUNKS_DIR, DATA_DIR,
-    ENTITY_RELATIONS_FILE, SILICONFLOW_API_KEY,
-    EMBEDDING_MODEL, RERANKER_MODEL,
+    ENTITY_RELATIONS_FILE,
 )
-import backend.config as config
 
 # Import AgenticRAG components
 from backend.agent.sessions import SessionManager
@@ -157,7 +156,7 @@ async def status():
     """Get service health status."""
     return {
         "status": "healthy",
-        "api_key_configured": bool(SILICONFLOW_API_KEY),
+        "api_key_configured": bool(config.SILICONFLOW_API_KEY),
         "embedding_model": config.EMBEDDING_MODEL,
         "reranker_model": config.RERANKER_MODEL,
         "llm_model": config.DEEPSEEK_LLM_MODEL or "not configured"
@@ -469,6 +468,8 @@ async def delete_conversation(session_id: str, user: dict = Depends(get_current_
 @app.put("/conversations/{session_id}/rename")
 async def rename_conversation(session_id: str, name: str = "", user: dict = Depends(get_current_user)):
     """Rename a conversation."""
+    if not name or not name.strip():
+        raise HTTPException(status_code=422, detail="会话名称不能为空")
     if not user:
         raise HTTPException(status_code=401, detail="未登录")
     db = await get_db()
@@ -510,6 +511,14 @@ async def agent_chat(req: AgentChatRequest):
     model_id = req.model or DEFAULT_MODEL
     logger.info(f"[AGENT CHAT] session={actual_session_id} model={model_id} message={req.message[:100]}")
 
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    if actual_session_id != req.session_id:
+        headers["X-New-Session-Id"] = actual_session_id
+
     return StreamingResponse(
         agent_loop(
             session_id=actual_session_id,
@@ -518,12 +527,7 @@ async def agent_chat(req: AgentChatRequest):
             model_id=model_id,
         ),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-            "X-New-Session-Id": actual_session_id if actual_session_id != req.session_id else "",
-        }
+        headers=headers,
     )
 
 
@@ -859,5 +863,8 @@ async def get_stories():
 
 # ============== Run Server ==============
 if __name__ == "__main__":
+    # Validate critical environment variables
+    if not config.SILICONFLOW_API_KEY:
+        raise RuntimeError("SILICONFLOW_API_KEY 环境变量未设置，拒绝启动。请在 .env 中配置。")
     port = int(os.environ.get("PORT", 8889))
     uvicorn.run(app, host="0.0.0.0", port=port)

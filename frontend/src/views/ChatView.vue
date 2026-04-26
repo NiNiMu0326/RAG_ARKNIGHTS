@@ -14,7 +14,7 @@
           <div v-else>
             <div
               v-for="(msg, idx) in sessionStore.currentSession?.messages"
-              :key="idx"
+              :key="`${msg.role || 'pending'}-${idx}`"
               class="chat-message"
               :class="msg.role"
             >
@@ -193,7 +193,7 @@
               <span class="pending-label">消息队列</span>
               <button class="pending-clear" @click="clearMessageQueue" title="清空队列">✕</button>
             </div>
-            <div v-for="(msg, idx) in messageQueue" :key="idx" class="pending-message">
+            <div v-for="(msg, idx) in messageQueue" :key="`${msg.role || 'pending'}-${idx}`" class="pending-message">
               <span class="pending-idx">{{ idx + 1 }}</span>
               <span class="pending-text">{{ msg }}</span>
             </div>
@@ -223,7 +223,7 @@
           <div class="quick-actions">
             <button
               v-for="(action, idx) in quickQuestionsStore.quickActions"
-              :key="idx"
+              :key="`${msg.role || 'pending'}-${idx}`"
               class="quick-action"
               @click="inputText = action.question"
               :title="action.question"
@@ -244,7 +244,7 @@
 </template>
 
 <script setup>
-import { ref, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useSessionStore } from '../stores/sessions'
 import { useQuickQuestionsStore } from '../stores/quickQuestions'
 import { useSettingsStore } from '../stores/settings'
@@ -831,15 +831,6 @@ function scrollToBottom() {
 .pending-message { display: flex; align-items: center; gap: var(--spacing-sm); padding: var(--spacing-xs) var(--spacing-sm); border-radius: var(--radius-sm); background: var(--bg-dark); }
 .pending-idx { font-size: 0.65rem; color: var(--text-dim); font-weight: 600; min-width: 16px; font-family: var(--font-mono); opacity: 0.6; }
 .pending-text { font-size: 0.82rem; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.quick-action { padding: var(--spacing-xs) var(--spacing-md); background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: var(--radius-lg); color: var(--text-secondary); font-size: 0.8rem; cursor: pointer; transition: all var(--transition-fast); }
-.quick-action:hover { border-color: var(--color-primary-dim); color: var(--color-primary); }
-.quick-action.refresh:hover { border-color: var(--color-primary); }
-.refresh-fixed { margin-left: auto; flex-shrink: 0; }
-.quick-action.refresh { background: var(--bg-panel); color: var(--color-primary); padding: var(--spacing-xs); border-color: var(--color-primary-dim); display: flex; align-items: center; justify-content: center; min-width: 38px; min-height: 38px; }
-.refresh-icon { transition: transform var(--transition-fast); width: 18px; height: 18px; }
-.quick-action.refresh:hover .refresh-icon { transform: rotate(180deg); }
-.refresh-icon.rotating { animation: rotate360 0.6s ease-out; }
-
 /* Tool call display */
 .tool-call-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--spacing-md); max-width: 85%; margin-bottom: var(--spacing-md); animation: fadeSlideIn 0.3s ease-out; margin-right: auto; }
 .tool-call-header { display: flex; align-items: center; gap: var(--spacing-sm); margin-bottom: var(--spacing-sm); }

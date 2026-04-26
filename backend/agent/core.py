@@ -336,9 +336,7 @@ async def agent_loop(
 
     loop_start = time.time()
 
-    # Streaming state for PSI tag parsing across content_delta events
-    psi_buffer = ""
-    in_psi_tag = False
+    # Streaming state
     pending_thinking = ""  # Accumulated thinking content from current round
 
     model_id = model_id or DEFAULT_MODEL
@@ -351,8 +349,6 @@ async def agent_loop(
 
     for round_num in range(1, max_rounds + 1):
         # Reset streaming state for each round
-        think_buffer = ""
-        in_thinking_tag = False
         pending_thinking = ""
 
         # Detect loop
@@ -385,139 +381,7 @@ async def agent_loop(
                     yield format_thinking_delta(event["content"])
 
                 elif etype == STREAM_EVENT_CONTENT_DELTA:
-                    # Stream answer content to frontend, filtering out thinking tags.
-                    # Content inside <think>...</thinking> or <thinking...>...</thinking>
-                    # is emitted as thinking_delta. Content outside is emitted as answer_delta.
-                    delta = event["delta"]
-                    think_buffer += delta
-                    clean_deltas = []
-
-                    while think_buffer:
-                        if in_thinking_tag:
-                            # Inside a thinking tag — look for closing </thinking> or </>
-                            lower_buf = think_buffer.lower()
-                            # Find the closing tag: </thinking> (any attrs) or </>
-                            close_simple = lower_buf.find("</>")
-                            close_think = lower_buf.find("</thinking")
-                            # Use whichever comes first, or -1 if neither found
-                            if close_think != -1 and close_simple != -1:
-                                end_idx = min(close_think, close_simple)
-                            elif close_think != -1:
-                                end_idx = close_think
-                            elif close_simple != -1:
-                                end_idx = close_simple
-                            else:
-                                end_idx = -1
-
-                            if end_idx != -1:
-                                thinking_chunk = think_buffer[:end_idx]
-                                if thinking_chunk:
-                                    pending_thinking += thinking_chunk
-                                    yield format_thinking_delta(thinking_chunk)
-                                rest = think_buffer[end_idx:]
-                                # Skip past the closing tag marker
-                                if close_think != -1 and close_simple == -1:
-                                    # </thinking> — skip to after >
-                                    gt = rest.find(">")
-                                    rest = rest[gt + 1:] if gt != -1 else ""
-                                elif close_simple != -1 and close_think == -1:
-                                    # </>  — skip 3 chars
-                                    rest = rest[3:]
-                                else:
-                                    # tie — use whichever matched at end_idx
-                                    if lower_buf[end_idx:end_idx + 2] == "</":
-                                        gt = rest.find(">")
-                                        rest = rest[gt + 1:] if gt != -1 else ""
-                                    else:
-                                        rest = rest[3:]
-                                think_buffer = rest
-                                in_thinking_tag = False
-                            else:
-                                # No closing tag yet — emit everything as thinking, wait for more
-                                pending_thinking += think_buffer
-                                yield format_thinking_delta(think_buffer)
-                                think_buffer = ""
-                                break
-                        else:
-                            # Outside thinking tag — look for opening <think> or <think...
-                            lower_buf = think_buffer.lower()
-                            # Try <think> first (most common), then <thinking
-                            open_idx = lower_buf.find("<think")
-                            if open_idx == -1:
-                                open_idx = lower_buf.find("<thinking")
-
-                            if open_idx != -1:
-                                before = think_buffer[:open_idx]
-                                if before:
-                                    clean_deltas.append(before)
-
-                                rest = think_buffer[open_idx:]
-                                rest_lower = lower_buf[open_idx:]
-
-                                # Check if it's <think>> (self-closing or opening+closing with no content)
-                                if rest_lower.startswith("<think>"):
-                                    # Empty <think>>, skip it entirely
-                                    think_buffer = rest[len("<think>"):]
-                                    continue
-                                elif rest_lower.startswith("<think/>") or rest_lower.startswith("<think />"):
-                                    # Self-closing with />, skip
-                                    think_buffer = rest[rest_lower.find(">") + 1:]
-                                    continue
-                                elif rest_lower.startswith("<thinking"):
-                                    # <thinking...> — check for self-closing or opening
-                                    rest_after_open = rest_lower[len("<thinking"):]
-                                    if rest_after_open.startswith("/>"):
-                                        think_buffer = rest[len("<thinking") + 2:]
-                                        continue
-                                    elif rest_after_open.startswith(">"):
-                                        think_buffer = rest[len("<thinking") + 1:]
-                                        in_thinking_tag = True
-                                        break
-                                    else:
-                                        # Has attributes, look for closing >
-                                        gt = rest.find(">")
-                                        if gt != -1:
-                                            if rest[gt - 1] == "/":
-                                                think_buffer = rest[gt + 1:]
-                                                continue
-                                            else:
-                                                think_buffer = rest[gt + 1:]
-                                                in_thinking_tag = True
-                                                break
-                                        else:
-                                            in_thinking_tag = True
-                                            think_buffer = rest
-                                            break
-                                elif rest_lower.startswith("<think"):
-                                    # Must be <think> with attributes (rare) or opening
-                                    gt = rest.find(">")
-                                    if gt != -1:
-                                        if rest[gt - 1] == "/":
-                                            think_buffer = rest[gt + 1:]
-                                            continue
-                                        else:
-                                            think_buffer = rest[gt + 1:]
-                                            in_thinking_tag = True
-                                            break
-                                    else:
-                                        in_thinking_tag = True
-                                        think_buffer = rest
-                                        break
-                                else:
-                                    # Shouldn't happen, but emit as answer
-                                    clean_deltas.append(think_buffer)
-                                    think_buffer = ""
-                                    break
-                            else:
-                                # No opening tag at all — emit everything as clean content
-                                clean_deltas.append(think_buffer)
-                                think_buffer = ""
-                                break
-
-                    # Emit cleaned content deltas
-                    for clean_d in clean_deltas:
-                        if clean_d:
-                            yield format_answer_delta(clean_d)
+                    yield format_answer_delta(event["delta"])
 
                 elif etype == STREAM_EVENT_TOOL_CALLS:
                     # Model decided to use tools

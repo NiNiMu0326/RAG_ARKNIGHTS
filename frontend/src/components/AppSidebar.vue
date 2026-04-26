@@ -164,7 +164,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSessionStore } from '../stores/sessions'
 import { useAuthStore } from '../stores/auth'
@@ -220,19 +220,25 @@ watch(() => sessionStore.currentSessionId, () => {
   sessionExpanded.value = true
 })
 
+const _authChangedHandler = async () => {
+  if (authStore.isLoggedIn) {
+    await sessionStore.mergeLocalToServer()
+  } else {
+    await sessionStore.loadSessions()
+  }
+}
+
 onMounted(() => {
   // Load data if on graph page and data not loaded
   if (showGraphControls.value && isEntitiesEmpty(gc.graphData.value.entities)) {
     gc.loadGraphData()
   }
   // Listen for auth changes to sync sessions
-  window.addEventListener('auth-changed', async () => {
-    if (authStore.isLoggedIn) {
-      await sessionStore.mergeLocalToServer()
-    } else {
-      await sessionStore.loadSessions()
-    }
-  })
+  window.addEventListener('auth-changed', _authChangedHandler)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('auth-changed', _authChangedHandler)
 })
 
 function promptRename(sessionId) {

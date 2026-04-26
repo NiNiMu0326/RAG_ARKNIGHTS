@@ -8,7 +8,9 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "arknights-rag-jwt-secret-change-in-production")
+JWT_SECRET = os.environ.get("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError("JWT_SECRET 环境变量未设置，拒绝启动。请在 .env 中配置 JWT_SECRET。")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_DAYS = 30
 

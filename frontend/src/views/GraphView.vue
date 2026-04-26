@@ -5,27 +5,27 @@
 
 
     <!-- Edge Info Panel -->
-    <div class="kg-edge-info" :class="{ active: selectedEdge, 'is-hovered': edgeInfoHovered }" ref="edgeInfoEl">
+    <div class="kg-edge-info" :class="{ active: controller.selectedEdge.value, 'is-hovered': edgeInfoHovered }" ref="edgeInfoEl">
       <div class="kg-edge-info-header">
         <span class="kg-edge-info-title">关系详情</span>
-        <button class="kg-edge-info-close" @click="selectedEdge = null">X</button>
+        <button class="kg-edge-info-close" @click="controller.selectedEdge.value = null">X</button>
       </div>
-      <div class="kg-edge-info-body" v-if="selectedEdge">
+      <div class="kg-edge-info-body" v-if="controller.selectedEdge.value">
         <div class="kg-edge-info-item">
           <span class="kg-edge-info-label">起点</span>
-          <span class="kg-edge-info-value">{{ selectedEdge.source }}</span>
+          <span class="kg-edge-info-value">{{ controller.selectedEdge.value.source }}</span>
         </div>
         <div class="kg-edge-info-item">
           <span class="kg-edge-info-label">关系</span>
-          <span class="kg-edge-info-value kg-edge-relation">{{ selectedEdge.relation }}</span>
+          <span class="kg-edge-info-value kg-edge-relation">{{ controller.selectedEdge.value.relation }}</span>
         </div>
         <div class="kg-edge-info-item">
           <span class="kg-edge-info-label">终点</span>
-          <span class="kg-edge-info-value">{{ selectedEdge.target }}</span>
+          <span class="kg-edge-info-value">{{ controller.selectedEdge.value.target }}</span>
         </div>
-        <div class="kg-edge-info-item kg-edge-info-desc" v-if="selectedEdge.description">
+        <div class="kg-edge-info-item kg-edge-info-desc" v-if="controller.selectedEdge.value.description">
           <span class="kg-edge-info-label">描述</span>
-          <span class="kg-edge-info-value">{{ selectedEdge.description }}</span>
+          <span class="kg-edge-info-value">{{ controller.selectedEdge.value.description }}</span>
         </div>
       </div>
     </div>
@@ -62,7 +62,6 @@ const controller = useGraphController()
 
 const graphContainer = ref(null)
 const zoomLevel = ref(100)
-const selectedEdge = ref(null)
 const edgeInfoHovered = ref(false)
 const edgeInfoEl = ref(null)
 
@@ -127,7 +126,7 @@ function initGraph() {
   // Click background
   cy.on('tap', (evt) => {
     if (evt.target === cy) {
-      selectedEdge.value = null
+      controller.selectedEdge.value = null
     }
   })
 
@@ -153,7 +152,7 @@ function showEdgeInfo(edge) {
   const relation = edge.data('relation')
   const description = edge.data('description') || ''
 
-  selectedEdge.value = { source, target, relation, description }
+  controller.selectedEdge.value = { source, target, relation, description }
 }
 
 // ============ Graph Update ============
@@ -196,7 +195,7 @@ function updateGraph() {
     controller.updateCurrentStats(subgraph.nodes.length, subgraph.edges.length)
   }
 
-  selectedEdge.value = null
+  controller.selectedEdge.value = null
 }
 
 function buildSubgraph() {
@@ -391,7 +390,7 @@ function fitView() {
 
 // ============ Edge info hover detection ============
 function onMouseMove(e) {
-  if (!edgeInfoEl.value || !selectedEdge.value) {
+  if (!edgeInfoEl.value || !controller.selectedEdge.value) {
     edgeInfoHovered.value = false
     return
   }
