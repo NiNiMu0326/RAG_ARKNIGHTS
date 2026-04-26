@@ -417,7 +417,10 @@ async def agent_loop(
             # Model decided to answer directly — content was already streamed
             # Filter PSI tags from final_content for answer_done event
             clean_content, _ = strip_think_tags(final_content)
-            session.add_message("assistant", clean_content)
+            msg_kwargs = {}
+            if final_reasoning:
+                msg_kwargs["reasoning_content"] = final_reasoning
+            session.add_message("assistant", clean_content, **msg_kwargs)
 
             total_ms = round((time.time() - loop_start) * 1000)
             logger.info(f"[ANSWER] session={session_id} rounds={round_num - 1} total_time={total_ms}ms content_len={len(clean_content)}")
