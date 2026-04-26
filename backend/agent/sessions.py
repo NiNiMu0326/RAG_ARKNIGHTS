@@ -1,0 +1,211 @@
+"""
+Session management for AgenticRAG.
+In-memory session store with TTL cleanup.
+"""
+
+import time
+import uuid
+import threading
+import logging
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Session:
+    """A conversation session with full message history."""
+    session_id: str
+    created_at: float = field(default_factory=time.time)
+    messages: List[Dict[str, Any]] = field(default_factory=list)
+
+    def add_message(self, role: str, content: str = "", **kwargs):
+        """Add a message to the session history."""
+        msg = {"role": role, "content": content, **kwargs}
+        self.messages.append(msg)
+
+    def add_assistant_tool_calls(self, tool_calls: list, content: str = "", reasoning_content: str = ""):
+        """Add an assistant message with tool_calls.
+
+        The reasoning_content is stored in the message for DeepSeek V4 Flash API compatibility.
+        """
+        tc_list = []
+        for tc in tool_calls:
+            tc_list.append({
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.name,
+                    "arguments": tc.arguments,
+                }
+            })
+        msg = {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": tc_list,
+        }
+        # Store reasoning_content (needs to be passed back to DeepSeek V4 Flash API)
+        if reasoning_content:
+            msg["reasoning_content"] = reasoning_content
+        self.messages.append(msg)
+
+    def add_tool_result(self, tool_call_id: str, result: Any):
+        """Add a tool result message."""
+        # Serialize result to string if not already
+        if isinstance(result, str):
+            content = result
+        else:
+            import json
+            try:
+                content = json.dumps(result, ensure_ascii=False)
+            except (TypeError, ValueError):
+                content = str(result)
+        
+        self.messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": content,
+        })
+
+    def get_context_messages(self, max_turns: int = 20) -> List[Dict]:
+        """Get recent N messages as context for LLM.
+
+        Strips any non-standard fields (prefixed with _) before sending to the API.
+
+        Keeps original tool_call_ids intact — providers like MiniMax require the
+        exact IDs they generated in previous turns to match tool results.
+        
+        Handles orphaned tool_calls/tool_results that may occur when a streaming
+        request is interrupted mid-way (e.g. client aborts while tools are executing).
+        """
+        messages = self.messages[-max_turns:]
+        
+        # ===== Pre-pass: identify valid tool_call IDs =====
+        # Collect all tool_call IDs from assistant messages
+        # and all tool_call_ids from tool result messages.
+        assistant_tc_ids = set()
+        for msg in messages:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    if tc.get("id"):
+                        assistant_tc_ids.add(tc["id"])
+        
+        result_tc_ids = set()
+        for msg in messages:
+            if msg.get("role") == "tool" and msg.get("tool_call_id"):
+                result_tc_ids.add(msg["tool_call_id"])
+        
+        # Find orphaned IDs (exist in one side but not the other)
+        orphan_assistant_ids = assistant_tc_ids - result_tc_ids
+        orphan_result_ids = result_tc_ids - assistant_tc_ids
+        
+        if orphan_assistant_ids or orphan_result_ids:
+            logger.warning(
+                f"[SESSION] Orphaned tool IDs detected: "
+                f"assistant_without_result={orphan_assistant_ids}, "
+                f"result_without_assistant={orphan_result_ids}. "
+                f"Cleaning up (likely from interrupted request)."
+            )
+        
+        # ===== Clean pass: remove orphaned entries, keep original IDs =====
+        clean = []
+        for msg in messages:
+            clean_msg = {k: v for k, v in msg.items() if not k.startswith("_")}
+            
+            if clean_msg.get("role") == "assistant" and clean_msg.get("tool_calls"):
+                # Filter out orphaned tool_calls
+                remaining_tcs = [
+                    tc for tc in clean_msg["tool_calls"]
+                    if tc.get("id", "") not in orphan_assistant_ids
+                ]
+                if remaining_tcs:
+                    clean_msg["tool_calls"] = remaining_tcs
+                else:
+                    # All tool_calls were orphaned — downgrade to plain assistant message
+                    del clean_msg["tool_calls"]
+            
+            if clean_msg.get("role") == "tool" and clean_msg.get("tool_call_id"):
+                if clean_msg["tool_call_id"] in orphan_result_ids:
+                    logger.debug(f"[SESSION] Dropping orphaned tool result for id={clean_msg['tool_call_id']}")
+                    continue  # Skip this message entirely
+            
+            clean.append(clean_msg)
+        
+        return clean
+
+
+class SessionManager:
+    """In-memory session store with TTL-based cleanup."""
+
+    def __init__(self, max_sessions: int = 1000, ttl_seconds: int = 3600):
+        self._sessions: Dict[str, Session] = {}
+        self._max_sessions = max_sessions
+        self._ttl = ttl_seconds
+        self._lock = threading.Lock()
+        self._cleanup_interval = 300  # Clean up every 5 minutes
+        self._last_cleanup = time.time()
+
+    def create_session(self) -> str:
+        """Create a new session and return its ID."""
+        # Periodic cleanup
+        self._maybe_cleanup()
+
+        with self._lock:
+            # Evict oldest if at capacity
+            if len(self._sessions) >= self._max_sessions:
+                oldest_id = min(self._sessions, key=lambda k: self._sessions[k].created_at)
+                del self._sessions[oldest_id]
+                logger.info(f"[SESSION] Evicted oldest session: {oldest_id}")
+
+            session_id = str(uuid.uuid4())[:8]
+            self._sessions[session_id] = Session(session_id=session_id)
+            logger.info(f"[SESSION] Created: {session_id} (total: {len(self._sessions)})")
+            return session_id
+
+    def get_session(self, session_id: str) -> Optional[Session]:
+        """Get a session by ID. Returns None if not found or expired."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                logger.warning(f"[SESSION] Not found: {session_id}")
+                return None
+
+            # Check TTL
+            age = time.time() - session.created_at
+            if age > self._ttl:
+                del self._sessions[session_id]
+                logger.warning(f"[SESSION] Expired: {session_id} (age={age:.0f}s, ttl={self._ttl}s)")
+                return None
+
+            logger.debug(f"[SESSION] Found: {session_id} (age={age:.0f}s, messages={len(session.messages)})")
+            return session
+
+    def delete_session(self, session_id: str):
+        """Delete a session."""
+        with self._lock:
+            self._sessions.pop(session_id, None)
+            logger.info(f"Deleted session: {session_id}")
+
+    def _maybe_cleanup(self):
+        """Periodically clean up expired sessions."""
+        now = time.time()
+        if now - self._last_cleanup < self._cleanup_interval:
+            return
+
+        self._last_cleanup = now
+        expired = []
+        with self._lock:
+            for sid, session in self._sessions.items():
+                if now - session.created_at > self._ttl:
+                    expired.append(sid)
+            for sid in expired:
+                del self._sessions[sid]
+
+        if expired:
+            logger.info(f"Cleaned up {len(expired)} expired sessions")
+
+    def get_active_count(self) -> int:
+        """Return number of active sessions."""
+        with self._lock:
+            return len(self._sessions)
