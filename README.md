@@ -65,8 +65,8 @@ python backend/build_faiss_index.py      # FAISS 向量索引
 ### 5. 启动
 
 ```bash
-# 后端（默认端口 8889）
-cd backend && uvicorn main:app --host 0.0.0.0 --port 8889
+# 后端（默认端口 8100）
+cd backend && uvicorn main:app --host 0.0.0.0 --port 8100
 
 # 前端开发（端口 5300，通过 Vite 代理转发 API 请求）
 cd frontend && npm run dev

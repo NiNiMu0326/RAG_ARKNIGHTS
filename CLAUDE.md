@@ -216,11 +216,11 @@
 | `DEEPSEEK_API_KEY_2` | 否 | DeepSeek 官方模型 API Key |
 | `TAVILY_API_KEY` | 否 | Tavily 网络搜索，不填则 DuckDuckGo 兜底 |
 | `MINIMAX_API_KEY` | 否 | MiniMax M2.5/M2.7 模型 |
-| `PORT` | 否 | 后端端口，默认 8889 |
+| `PORT` | 否 | 后端端口，默认 8100 |
 
 ## 开发注意事项
 
-- **端口**：后端 8889，前端开发服务器 5300（Vite 代理转发 API 到 8889）
+- **端口**：后端 8100，前端开发服务器 5300（Vite 代理转发 API 到 8100）
 - Agent 使用 DeepSeek Function Calling，**不要传 `parallel_tool_calls` 参数**（会使其更保守）
 - GraphRAG 使用 `nx.DiGraph`（有向图），但路径查找时转为无向视图
 - BM25 索引和 GraphBuilder 采用懒加载单例模式（线程安全）
@@ -264,7 +264,7 @@ Agent 流式对话使用以下 SSE 事件，按时间顺序：
 
 ```bash
 # 后端
-cd backend && uvicorn main:app --host 0.0.0.0 --port 8889
+cd backend && uvicorn main:app --host 0.0.0.0 --port 8100
 
 # 前端开发
 cd frontend && npm run dev

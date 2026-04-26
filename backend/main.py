@@ -866,5 +866,5 @@ if __name__ == "__main__":
     # Validate critical environment variables
     if not config.SILICONFLOW_API_KEY:
         raise RuntimeError("SILICONFLOW_API_KEY 环境变量未设置，拒绝启动。请在 .env 中配置。")
-    port = int(os.environ.get("PORT", 8889))
+    port = int(os.environ.get("PORT", 8100))
     uvicorn.run(app, host="0.0.0.0", port=port)
