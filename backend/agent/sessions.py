@@ -5,7 +5,7 @@ In-memory session store with TTL cleanup.
 
 import time
 import uuid
-import threading
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
@@ -142,16 +142,16 @@ class SessionManager:
         self._sessions: Dict[str, Session] = {}
         self._max_sessions = max_sessions
         self._ttl = ttl_seconds
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
         self._cleanup_interval = 300  # Clean up every 5 minutes
         self._last_cleanup = time.time()
 
-    def create_session(self) -> str:
+    async def create_session(self) -> str:
         """Create a new session and return its ID."""
         # Periodic cleanup
-        self._maybe_cleanup()
+        await self._maybe_cleanup()
 
-        with self._lock:
+        async with self._lock:
             # Evict oldest if at capacity
             if len(self._sessions) >= self._max_sessions:
                 oldest_id = min(self._sessions, key=lambda k: self._sessions[k].created_at)
@@ -163,9 +163,9 @@ class SessionManager:
             logger.info(f"[SESSION] Created: {session_id} (total: {len(self._sessions)})")
             return session_id
 
-    def get_session(self, session_id: str) -> Optional[Session]:
+    async def get_session(self, session_id: str) -> Optional[Session]:
         """Get a session by ID. Returns None if not found or expired."""
-        with self._lock:
+        async with self._lock:
             session = self._sessions.get(session_id)
             if session is None:
                 logger.warning(f"[SESSION] Not found: {session_id}")
@@ -181,13 +181,13 @@ class SessionManager:
             logger.debug(f"[SESSION] Found: {session_id} (age={age:.0f}s, messages={len(session.messages)})")
             return session
 
-    def delete_session(self, session_id: str):
+    async def delete_session(self, session_id: str):
         """Delete a session."""
-        with self._lock:
+        async with self._lock:
             self._sessions.pop(session_id, None)
             logger.info(f"Deleted session: {session_id}")
 
-    def _maybe_cleanup(self):
+    async def _maybe_cleanup(self):
         """Periodically clean up expired sessions."""
         now = time.time()
         if now - self._last_cleanup < self._cleanup_interval:
@@ -195,7 +195,7 @@ class SessionManager:
 
         self._last_cleanup = now
         expired = []
-        with self._lock:
+        async with self._lock:
             for sid, session in self._sessions.items():
                 if now - session.created_at > self._ttl:
                     expired.append(sid)
@@ -205,7 +205,7 @@ class SessionManager:
         if expired:
             logger.info(f"Cleaned up {len(expired)} expired sessions")
 
-    def get_active_count(self) -> int:
+    async def get_active_count(self) -> int:
         """Return number of active sessions."""
-        with self._lock:
+        async with self._lock:
             return len(self._sessions)

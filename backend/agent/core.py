@@ -193,7 +193,7 @@ def format_error(error_msg: str) -> str:
 # ===== Prompt Injection Detection =====
 
 INJECTION_PATTERNS = [
-    re.compile(r'ignore\s+(previous|all|instructions|prompts?)', re.IGNORECASE),
+    re.compile(r'ignore\s+(?:\w+\s+)?(?:previous|all|instructions|prompts?)', re.IGNORECASE),
     re.compile(r'forget\s+(all|everything|previous|prompts?)', re.IGNORECASE),
     re.compile(r'(you\s+are\s+now|you\s+are\s+a|act\s+as\s+a)', re.IGNORECASE),
     re.compile(r'<script[^>]*>.*?</script\s*>', re.IGNORECASE | re.DOTALL),
@@ -204,10 +204,11 @@ INJECTION_PATTERNS = [
     re.compile(r'(?:首先)?忽略.*?(?:指令|规则|指示|要求)', re.IGNORECASE | re.DOTALL),
     re.compile(r'(?:首先)?抛开.*?(?:指令|规则|指示|要求)', re.IGNORECASE | re.DOTALL),
     re.compile(r'(?:首先)?丢弃.*?(?:指令|规则|指示|要求)', re.IGNORECASE | re.DOTALL),
-    re.compile(r'忘记[所有先前上述的]*(?:指令|规则|指示|内容)', re.IGNORECASE),
+    re.compile(r'忘记.{0,6}?(?:指令|规则|指示|内容)', re.IGNORECASE),
     re.compile(r'你是(一个)?(不同的?|别的|新的)[AI人机器智能助手]', re.IGNORECASE),
-    re.compile(r'你\s*(现?|现在|目前)\s*(是|变成|成为|被设定为)', re.IGNORECASE),
-    re.compile(r'(act|be|become)\s+as\s+a\s+(different|new)', re.IGNORECASE),
+    re.compile(r'你\s*(?:现在|目前|现)\s*(?:是|变成|成为|被设定为)', re.IGNORECASE),
+    re.compile(r'你(?:变成了?|成为了?|被设定为)', re.IGNORECASE),
+    re.compile(r'(?:act\s+as\s+a|(?:become|be)\s+a)\s+(?:different|new)', re.IGNORECASE),
 ]
 
 INJECTION_CLEANUPS = [
@@ -312,11 +313,11 @@ async def agent_loop(
     - detect_loop() to catch repeated identical tool_calls
     """
     # Get or create session BEFORE adding message, so message is never lost
-    session = session_manager.get_session(session_id)
+    session = await session_manager.get_session(session_id)
     if session is None:
         # Session expired — create new one and notify frontend via error event
         # (main.py will also set X-New-Session-Id header)
-        session = session_manager.create_session()
+        session = await session_manager.create_session()
         logger.warning(f"[SESSION] Session '{session_id}' expired, created new: {session.session_id}")
 
     # Add user message first — even if session was just recreated
@@ -327,7 +328,7 @@ async def agent_loop(
         logger.warning(f"[INJECTION] Potential prompt injection detected in session {session_id}")
         session.add_message("system", SECURITY_NOTICE)
 
-    if session_manager.get_session(session.session_id) is None:
+    if await session_manager.get_session(session.session_id) is None:
         # Extremely unlikely: session was cleaned up between creation and now
         yield format_error("会话创建失败，请重试")
         return

@@ -490,7 +490,7 @@ async def rename_conversation(session_id: str, name: str = "", user: dict = Depe
 @app.post("/agent/session")
 async def create_agent_session():
     """Create a new agent session."""
-    session_id = _session_manager.create_session()
+    session_id = await _session_manager.create_session()
     return {"session_id": session_id}
 
 
@@ -500,12 +500,12 @@ async def agent_chat(req: AgentChatRequest):
     
     If the session_id is invalid or expired, a new session is auto-created.
     """
-    session = _session_manager.get_session(req.session_id)
+    session = await _session_manager.get_session(req.session_id)
     actual_session_id = req.session_id
-    
+
     if session is None:
         # Session expired or invalid — auto-create a new one
-        actual_session_id = _session_manager.create_session()
+        actual_session_id = await _session_manager.create_session()
         logger.warning(f"Session '{req.session_id}' not found/expired, auto-created new session: {actual_session_id}")
     
     model_id = req.model or DEFAULT_MODEL
@@ -534,7 +534,7 @@ async def agent_chat(req: AgentChatRequest):
 @app.get("/agent/session/{session_id}/messages")
 async def get_session_messages(session_id: str):
     """Get session message history."""
-    session = _session_manager.get_session(session_id)
+    session = await _session_manager.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found or expired")
     return {"messages": session.messages}
@@ -543,14 +543,14 @@ async def get_session_messages(session_id: str):
 @app.delete("/agent/session/{session_id}")
 async def delete_agent_session(session_id: str):
     """Delete a session."""
-    _session_manager.delete_session(session_id)
+    await _session_manager.delete_session(session_id)
     return {"status": "ok"}
 
 
 @app.get("/agent/debug/trace")
 async def get_agent_debug_trace(session_id: str):
     """Get Agent's complete tool call trace for debugging."""
-    session = _session_manager.get_session(session_id)
+    session = await _session_manager.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found or expired")
 
@@ -579,7 +579,7 @@ async def get_agent_debug_trace(session_id: str):
 async def get_agent_stats():
     """Get agent session statistics."""
     return {
-        "active_sessions": _session_manager.get_active_count(),
+        "active_sessions": await _session_manager.get_active_count(),
         "max_sessions": _session_manager._max_sessions,
         "ttl_seconds": _session_manager._ttl,
     }
