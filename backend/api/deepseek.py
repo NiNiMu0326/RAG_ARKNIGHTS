@@ -7,6 +7,7 @@ import sys
 import json
 import time
 import logging
+import asyncio
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -23,6 +24,10 @@ STREAM_EVENT_THINKING_DELTA = "thinking_delta"
 STREAM_EVENT_CONTENT_DELTA = "content_delta"
 STREAM_EVENT_TOOL_CALLS = "tool_calls"
 STREAM_EVENT_DONE = "done"
+
+# Chunk size for streaming: split large text into small pieces (~token-level)
+# so frontend renders smoothly instead of getting one big block.
+STREAM_CHUNK_SIZE = 8
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +317,8 @@ class DeepSeekClient:
                     reasoning_delta = delta.get("reasoning_content")
                     if reasoning_delta:
                         reasoning_content_parts.append(reasoning_delta)
-                        yield {"type": STREAM_EVENT_THINKING_DELTA, "content": reasoning_delta}
+                        for i in range(0, len(reasoning_delta), STREAM_CHUNK_SIZE):
+                            yield {"type": STREAM_EVENT_THINKING_DELTA, "content": reasoning_delta[i:i+STREAM_CHUNK_SIZE]}
 
                     # Content delta — parse <think/> tags for models like MiniMax
                     content_delta = delta.get("content")
@@ -327,7 +333,8 @@ class DeepSeekClient:
                                     thinking_chunk = think_buffer[:close_idx]
                                     if thinking_chunk:
                                         reasoning_content_parts.append(thinking_chunk)
-                                        yield {"type": STREAM_EVENT_THINKING_DELTA, "content": thinking_chunk}
+                                        for i in range(0, len(thinking_chunk), STREAM_CHUNK_SIZE):
+                                            yield {"type": STREAM_EVENT_THINKING_DELTA, "content": thinking_chunk[i:i+STREAM_CHUNK_SIZE]}
                                     rest = think_buffer[close_idx:]
                                     close_end = rest.find(">")
                                     if close_end != -1:
@@ -347,12 +354,14 @@ class DeepSeekClient:
                                         emit_part = think_buffer[:-partial_len]
                                         if emit_part:
                                             reasoning_content_parts.append(emit_part)
-                                            yield {"type": STREAM_EVENT_THINKING_DELTA, "content": emit_part}
+                                            for i in range(0, len(emit_part), STREAM_CHUNK_SIZE):
+                                                yield {"type": STREAM_EVENT_THINKING_DELTA, "content": emit_part[i:i+STREAM_CHUNK_SIZE]}
                                         think_buffer = think_buffer[-partial_len:]
                                         break
                                     else:
                                         reasoning_content_parts.append(think_buffer)
-                                        yield {"type": STREAM_EVENT_THINKING_DELTA, "content": think_buffer}
+                                        for i in range(0, len(think_buffer), STREAM_CHUNK_SIZE):
+                                            yield {"type": STREAM_EVENT_THINKING_DELTA, "content": think_buffer[i:i+STREAM_CHUNK_SIZE]}
                                         think_buffer = ""
                                         break
                             else:
@@ -362,7 +371,8 @@ class DeepSeekClient:
                                     before = think_buffer[:open_idx]
                                     if before:
                                         content_parts.append(before)
-                                        yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": before}
+                                        for i in range(0, len(before), STREAM_CHUNK_SIZE):
+                                            yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": before[i:i+STREAM_CHUNK_SIZE]}
                                     rest = think_buffer[open_idx:]
                                     import re
                                     self_close_match = re.match(r"<think\s*/>", rest)
@@ -387,12 +397,14 @@ class DeepSeekClient:
                                         before = think_buffer[:partial_start]
                                         if before:
                                             content_parts.append(before)
-                                            yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": before}
+                                            for i in range(0, len(before), STREAM_CHUNK_SIZE):
+                                                yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": before[i:i+STREAM_CHUNK_SIZE]}
                                         think_buffer = think_buffer[partial_start:]
                                         break
                                     else:
                                         content_parts.append(think_buffer)
-                                        yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": think_buffer}
+                                        for i in range(0, len(think_buffer), STREAM_CHUNK_SIZE):
+                                            yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": think_buffer[i:i+STREAM_CHUNK_SIZE]}
                                         think_buffer = ""
                                         break
 
@@ -421,11 +433,13 @@ class DeepSeekClient:
             if in_think_tag:
                 # Still in think tag at end of stream — treat as thinking
                 reasoning_content_parts.append(think_buffer)
-                yield {"type": STREAM_EVENT_THINKING_DELTA, "content": think_buffer}
+                for i in range(0, len(think_buffer), STREAM_CHUNK_SIZE):
+                    yield {"type": STREAM_EVENT_THINKING_DELTA, "content": think_buffer[i:i+STREAM_CHUNK_SIZE]}
             else:
                 # Not in think tag — treat as answer content
                 content_parts.append(think_buffer)
-                yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": think_buffer}
+                for i in range(0, len(think_buffer), STREAM_CHUNK_SIZE):
+                    yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": think_buffer[i:i+STREAM_CHUNK_SIZE]}
             think_buffer = ""
 
         # Build final results

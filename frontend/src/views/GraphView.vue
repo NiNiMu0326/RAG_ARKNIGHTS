@@ -433,6 +433,9 @@ watch(() => controller.selectedNodes.value, (newVal) => {
 watch(() => controller.neighborLevel.value, updateGraph)
 watch(() => controller.selectedRelations.value, updateGraph, { deep: true })  // Needs deep: true - uses .splice()/.push()
 watch(() => controller.hoveredRelation.value, applyEdgeHoverStyles)
+watch(() => controller.graphData.value, () => {
+  updateGraph()
+})  // Re-render when graph data finishes loading (e.g. sidebar-triggered async load after activation)
 </script>
 
 <style scoped>

@@ -233,7 +233,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onActivated } from 'vue'
+import { ref, computed, onMounted, onActivated, watch } from 'vue'
 import { api, debounce } from '../api'
 
 const activeTab = ref('chunk')
@@ -248,18 +248,24 @@ const loadingChunks = ref(false)
 const stats = ref(null)
 const graphData = ref(null)
 const chunkNavInput = ref(1)
+const dashboardLoaded = ref(false)
 
 onMounted(() => {
   loadChunks()
-  loadStats()
-  loadGraphData()
 })
 
-// keep-alive 缓存后再次激活时重新加载数据
+// keep-alive 缓存后再次激活时重新加载chunks（仅在数据为空时加载，避免重置用户选择）
 onActivated(() => {
-  loadChunks()
-  loadStats()
-  loadGraphData()
+  if (chunks.value.length === 0) loadChunks()
+})
+
+// 懒加载：切换到数据仪表板时才加载 stats 和 graphData
+watch(activeTab, (tab) => {
+  if (tab === 'dashboard' && !dashboardLoaded.value) {
+    dashboardLoaded.value = true
+    loadStats()
+    loadGraphData()
+  }
 })
 
 async function loadChunks() {
@@ -554,7 +560,7 @@ function confirmCancel() {
 .relation-detail-expand { margin-left: auto; font-size: 0.7rem; color: var(--text-dim); }
 .relation-detail-desc { margin-top: var(--spacing-sm); padding-top: var(--spacing-sm); border-top: 1px solid var(--border-color); font-size: 0.8rem; color: var(--text-secondary); line-height: 1.6; }
 .relation-chart { height: 280px; overflow-y: auto; }
-.vertical-bar-chart { display: flex; align-items: flex-end; justify-content: space-around; height: 220px; padding: var(--spacing-md); gap: var(--spacing-sm); }
+.vertical-bar-chart { display: flex; align-items: flex-end; justify-content: flex-start; height: 220px; padding: var(--spacing-md); gap: var(--spacing-sm); }
 .vertical-bar-item { display: flex; flex-direction: column; align-items: center; flex: 1; max-width: 60px; height: 100%; }
 .vertical-bar-value { font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-primary); margin-bottom: var(--spacing-xs); }
 .vertical-bar-track { flex: 1; width: 100%; background: var(--bg-dark); border-radius: var(--radius-sm) var(--radius-sm) 0 0; overflow: hidden; display: flex; align-items: flex-end; }

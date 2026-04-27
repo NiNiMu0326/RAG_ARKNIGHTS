@@ -42,6 +42,7 @@ const relSearchFocused = ref(false)
 const availableRelations = ref([])
 const hoveredRelation = ref(null)
 const loading = ref(false)
+const selectedEdge = ref(null)
 const stats = reactive({ nodes: 0, edges: 0 })
 const currentStats = reactive({ nodes: 0, edges: 0 })
 
@@ -220,6 +221,7 @@ export function useGraphController() {
     availableRelations,
     hoveredRelation,
     loading,
+    selectedEdge,
     stats,
     currentStats,
     relationColors,

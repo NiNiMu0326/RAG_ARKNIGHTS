@@ -101,6 +101,24 @@ async def log_requests(request: Request, call_next):
 _session_manager = SessionManager(max_sessions=1000, ttl_seconds=3600)
 
 
+# ===== Entity Relations Cache =====
+# Cache the 116KB entity_relations.json in memory to avoid repeated disk reads.
+# Both /knowledge-graph and /stats need this data, and it doesn't change at runtime.
+_entity_relations_cache: Optional[Dict] = None
+
+
+def _load_entity_relations() -> Dict:
+    """Load entity relations from JSON file, cached in memory."""
+    global _entity_relations_cache
+    if _entity_relations_cache is None:
+        if ENTITY_RELATIONS_FILE.exists():
+            with open(ENTITY_RELATIONS_FILE, "r", encoding="utf-8") as f:
+                _entity_relations_cache = json.load(f)
+        else:
+            _entity_relations_cache = {"entities": [], "relations": []}
+    return _entity_relations_cache
+
+
 # ===== AgenticRAG Request Models =====
 
 class AgentChatRequest(BaseModel):
@@ -209,13 +227,8 @@ async def get_chunk(collection: str, filename: str):
 
 @app.get("/knowledge-graph", response_model=EntityRelationData)
 async def get_graph():
-    """Get entity relations for knowledge graph"""
-    if not ENTITY_RELATIONS_FILE.exists():
-        return EntityRelationData(entities=[], relations=[])
-
-    with open(ENTITY_RELATIONS_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
+    """Get entity relations for knowledge graph (cached)."""
+    data = _load_entity_relations()
     return EntityRelationData(
         entities=data.get("entities", []),
         relations=data.get("relations", [])
@@ -238,11 +251,9 @@ async def get_stats():
         if collection_dir.exists():
             stats[coll] = len(list(collection_dir.glob("*.md"))) + len(list(collection_dir.glob("*.txt")))
 
-    # Count relations
-    if ENTITY_RELATIONS_FILE.exists():
-        with open(ENTITY_RELATIONS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            stats["relations"] = len(data.get("relations", []))
+    # Count relations (cached)
+    data = _load_entity_relations()
+    stats["relations"] = len(data.get("relations", []))
 
     return StatsResponse(**stats)
 
