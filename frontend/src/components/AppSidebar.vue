@@ -112,7 +112,7 @@
               <span class="sidebar-session-time">{{ formatTime(new Date(session.updatedAt)) }}</span>
             </div>
             <div class="sidebar-session-actions">
-              <button class="sidebar-session-action-btn" @click.stop="promptRename(session.id)" title="重命名">编</button>
+              <button class="sidebar-session-action-btn" @click.stop="promptRename(session.id)" title="重命名">R</button>
               <button class="sidebar-session-action-btn delete" @click.stop="confirmDelete(session.id)" title="删除">X</button>
             </div>
           </div>
