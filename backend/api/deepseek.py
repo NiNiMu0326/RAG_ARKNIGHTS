@@ -79,6 +79,7 @@ class DeepSeekClient:
             raise ValueError("DeepSeek API key must be provided or set in DEEPSEEK_API_KEY environment variable.")
         self.base_url = config.DEEPSEEK_BASE_URL
         self.model = config.DEEPSEEK_LLM_MODEL
+        self.disable_thinking = False  # Set True for models where deep thinking is overkill (e.g. MiniMax M2.7)
 
         # Create session with connection pooling and retry logic
         self._session = requests.Session()
@@ -178,6 +179,9 @@ class DeepSeekClient:
         if tools:
             payload["tools"] = tools
 
+        if self.disable_thinking:
+            payload["thinking"] = {"type": "disabled"}
+
         payload.update(kwargs)
 
         logger.info(f"[API CALL] POST {url} model={model} messages={len(messages)} tools={len(tools) if tools else 0}")
@@ -261,6 +265,9 @@ class DeepSeekClient:
 
         if tools:
             payload["tools"] = tools
+
+        if self.disable_thinking:
+            payload["thinking"] = {"type": "disabled"}
 
         payload.update(kwargs)
 

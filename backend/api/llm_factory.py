@@ -88,6 +88,7 @@ def _get_minimax_client(model_name: str) -> DeepSeekClient:
         client = DeepSeekClient(api_key=api_key)
         client.base_url = "https://api.minimaxi.com/v1"
         client.model = model_name
+        client.disable_thinking = True  # MiniMax M2.7 deep thinking is overkill for simple RAG
         _clients[key] = client
     return _clients[key]
 
