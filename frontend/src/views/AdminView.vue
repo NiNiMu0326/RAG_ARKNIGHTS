@@ -233,7 +233,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onActivated } from 'vue'
 import { api, debounce } from '../api'
 
 const activeTab = ref('chunk')
@@ -250,6 +250,13 @@ const graphData = ref(null)
 const chunkNavInput = ref(1)
 
 onMounted(() => {
+  loadChunks()
+  loadStats()
+  loadGraphData()
+})
+
+// keep-alive 缓存后再次激活时重新加载数据
+onActivated(() => {
   loadChunks()
   loadStats()
   loadGraphData()

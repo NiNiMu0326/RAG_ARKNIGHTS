@@ -53,7 +53,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, onActivated, watch } from 'vue'
 import cytoscape from 'cytoscape'
 import { useGraphController } from '../composables/useGraphController'
 import { countEntities } from '../composables/useGraphController'
@@ -406,6 +406,16 @@ onMounted(async () => {
   await controller.loadGraphData()
   updateGraph()
   document.addEventListener('mousemove', onMouseMove)
+})
+
+// keep-alive 恢复时重建 cytoscape（DOM 已重建）
+onActivated(() => {
+  if (cy) {
+    cy.destroy()
+    cy = null
+  }
+  initGraph()
+  updateGraph()
 })
 
 onUnmounted(() => {
