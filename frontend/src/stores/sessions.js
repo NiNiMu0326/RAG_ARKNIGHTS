@@ -11,6 +11,7 @@ export const useSessionStore = defineStore('sessions', () => {
   const backendSessionIds = ref({})
 
   function _isEmptySession(s) {
+    if (!s) return true
     return s.isEmpty || !s.name || s.name.trim() === '' ||
       (s.name === '新会话' && (!s.messages || s.messages.length === 0))
   }
