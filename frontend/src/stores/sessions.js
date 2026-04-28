@@ -10,58 +10,6 @@ export const useSessionStore = defineStore('sessions', () => {
   // Backend agent session ID mapping: frontendSessionId -> backendSessionId
   const backendSessionIds = ref({})
 
-  // Per-session streaming state so SSE streams survive session switching.
-  // Each key is a frontend sessionId; the value holds the live streaming UI state.
-  const streamingStates = ref({})
-
-  function _ensureStreamingState(sessionId) {
-    if (!streamingStates.value[sessionId]) {
-      streamingStates.value[sessionId] = {
-        answer: '',
-        thinking: '',
-        round: 0,
-        thinkingTimeMs: 0,
-        thinkingStartTime: 0,
-        abortController: null,
-        isLoading: false,
-      }
-    }
-    return streamingStates.value[sessionId]
-  }
-
-  function getStreamingState(sessionId) {
-    return streamingStates.value[sessionId] || null
-  }
-
-  function removeStreamingState(sessionId) {
-    delete streamingStates.value[sessionId]
-  }
-
-  function abortSessionStream(sessionId) {
-    const st = streamingStates.value[sessionId]
-    if (st?.abortController) {
-      st.abortController.abort()
-    }
-    // Save partial content as messages before removing
-    if (st?.thinking) {
-      const timeMs = st.thinkingStartTime ? Date.now() - st.thinkingStartTime : st.thinkingTimeMs
-      addMessageToSession(sessionId, { role: 'thinking', round: st.round, content: st.thinking, time_ms: Math.round(timeMs) })
-    }
-    if (st?.answer) {
-      addMessageToSession(sessionId, { role: 'assistant', content: st.answer })
-    }
-    removeStreamingState(sessionId)
-  }
-
-  /** Internal: add a message object directly to a session by id (used by streaming finalization). */
-  function addMessageToSession(sessionId, msg) {
-    const s = sessions.value[sessionId]
-    if (!s) return
-    s.messages.push({ ...msg, timestamp: Date.now() })
-    s.updatedAt = Date.now()
-    if (s.isEmpty) delete s.isEmpty
-  }
-
   function _isEmptySession(s) {
     if (!s) return true
     return s.isEmpty || !s.name || s.name.trim() === '' ||
@@ -313,6 +261,26 @@ export const useSessionStore = defineStore('sessions', () => {
     saveSessions()
   }
 
+  // Variants that write to a specific session (used by streaming callbacks so
+  // content goes to the correct session even after user switches sessions).
+  function addMessageTo(sessionId, role, content, extra = {}) {
+    const session = sessions.value[sessionId]
+    if (!session) return
+    session.messages.push({ role, content, timestamp: Date.now(), ...extra })
+    session.updatedAt = Date.now()
+    saveSessions()
+  }
+
+  function addThinkingMessageTo(sessionId, roundNum, content, timeMs = 0) {
+    const session = sessions.value[sessionId]
+    if (!session) return
+    session.messages.push({
+      role: 'thinking', round: roundNum, content, timestamp: Date.now(), time_ms: timeMs,
+    })
+    session.updatedAt = Date.now()
+    saveSessions()
+  }
+
   function addToolCallMessage(toolCalls, roundNum) {
     let targetSessionId = currentSessionId.value
     if (!targetSessionId || !sessions.value[targetSessionId]) return
@@ -413,18 +381,14 @@ export const useSessionStore = defineStore('sessions', () => {
     currentSession,
     sessionList,
     backendSessionIds,
-    streamingStates,
-    getStreamingState,
-    _ensureStreamingState,
-    removeStreamingState,
-    abortSessionStream,
-    addMessageToSession,
     createNewSession,
     deleteSession,
     switchSession,
     renameSession,
     addMessage,
     addThinkingMessage,
+    addMessageTo,
+    addThinkingMessageTo,
     addToolCallMessage,
     updateToolCallResult,
     saveSessions,

@@ -244,7 +244,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useSessionStore } from '../stores/sessions'
 import { useQuickQuestionsStore } from '../stores/quickQuestions'
 import { useSettingsStore } from '../stores/settings'
@@ -255,22 +255,17 @@ const quickQuestionsStore = useQuickQuestionsStore()
 const settingsStore = useSettingsStore()
 
 const inputText = ref('')
+const isLoading = ref(false)
+const currentAnswer = ref('')
 const expandedTools = ref([])
 const expandedThinking = ref([])
 const toolItemRefs = reactive({})
+const currentThinking = ref('')
+const currentThinkingTimeMs = ref(0)
+const thinkingStartTime = ref(0)
 const messagesContainer = ref(null)
 const messageQueue = ref([])
-
-// Per-session streaming state — lives in store so SSE survives session switching
-const currentStreamingState = computed(() => {
-  const sid = sessionStore.currentSessionId
-  return sid ? sessionStore.getStreamingState(sid) : null
-})
-const isLoading = computed(() => currentStreamingState.value?.isLoading || false)
-const currentAnswer = computed(() => currentStreamingState.value?.answer || '')
-const currentThinking = computed(() => currentStreamingState.value?.thinking || '')
-const currentThinkingTimeMs = computed(() => currentStreamingState.value?.thinkingTimeMs || 0)
-const currentRound = computed(() => currentStreamingState.value?.round || 0)
+const abortController = ref(null)
 
 // Initialize on mount
 onMounted(() => {
@@ -309,19 +304,39 @@ onUnmounted(() => {
   console.log('[ChatView] unmounted')
 })
 
-// Watch for session changes — no longer aborts streams, they continue in background
+// Watch for session changes to update lastResult
 watch(() => sessionStore.currentSessionId, (newId, oldId) => {
   console.log('[ChatView] session changed from', oldId, 'to', newId)
 
+  // 只有真正切换到不同会话时才清理流式输出状态
   if (newId !== oldId) {
-    // Just scroll to bottom for the new session's messages
-    nextTick(() => scrollToBottom())
-
-    // 如果是新建的会话（消息为空），刷新快速问题
-    if (!sessionStore.currentSession || sessionStore.currentSession.messages?.length === 0) {
-      console.log('[ChatView] New session detected, refreshing quick actions')
-      refreshQuickActions()
+    // 如果是从null到有效ID，可能是初始加载，不中止请求
+    if (oldId !== null) {
+      // Save in-progress content to the OLD session, then clear UI for the new session.
+      // The SSE stream keeps running — its callbacks target the old sessionId, so the
+      // final answer will land in the correct session even after the user switches away.
+      if (isLoading.value && currentThinking.value) {
+        const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
+        sessionStore.addThinkingMessageTo(oldId, currentRound, currentThinking.value, Math.round(thinkTime))
+      }
+      if (isLoading.value && currentAnswer.value) {
+        sessionStore.addMessageTo(oldId, 'assistant', currentAnswer.value)
+      }
+      // Clear display refs but do NOT abort — the stream continues in background
+      isLoading.value = false
+      currentAnswer.value = ''
+      currentThinking.value = ''
+      currentThinkingTimeMs.value = 0
     }
+  }
+
+  // 切换会话时滚动到底部
+  nextTick(() => scrollToBottom())
+
+  // 如果是新建的会话（消息为空），刷新快速问题
+  if (!sessionStore.currentSession || sessionStore.currentSession.messages?.length === 0) {
+    console.log('[ChatView] New session detected, refreshing quick actions')
+    refreshQuickActions()
   }
 })
 
@@ -416,52 +431,55 @@ async function sendMessage() {
   const content = inputText.value.trim()
   if (!content) return
 
-  const targetSessionId = sessionStore.currentSessionId
+  const streamSessionId = sessionStore.currentSessionId   // captured so callbacks target the right session even after switch
 
-  // If current session is already streaming, queue the message
-  const curSt = sessionStore.getStreamingState(targetSessionId)
-  if (curSt?.isLoading) {
+  // If already loading, add to queue (max 2 messages)
+  if (isLoading.value) {
     if (messageQueue.value.length < 20) {
       messageQueue.value.push(content)
     }
     return
   }
 
+  isLoading.value = true
   inputText.value = ''
+  currentAnswer.value = ''
   expandedTools.value = []
   expandedThinking.value = []
+  currentThinking.value = ''
+  currentThinkingTimeMs.value = 0
+  thinkingStartTime.value = 0
 
   sessionStore.addMessage('user', content)
   nextTick(() => scrollToBottom())
 
-  // Abort any previous stream for the SAME session, then create fresh streaming state
-  sessionStore.abortSessionStream(targetSessionId)
-  const st = sessionStore._ensureStreamingState(targetSessionId)
-  st.isLoading = true
-  st.answer = ''
-  st.thinking = ''
-  st.round = 0
-  st.thinkingTimeMs = 0
-  st.thinkingStartTime = 0
-
+  // Create AbortController for cancellation
+  if (abortController.value) {
+    abortController.value.abort()
+  }
   const controller = new AbortController()
-  st.abortController = controller
+  abortController.value = controller
 
   // Get or create backend session
-  let backendSessionId = sessionStore.getBackendSessionId(targetSessionId)
+  let backendSessionId = sessionStore.getBackendSessionId()
   if (!backendSessionId) {
     try {
       const result = await api.createAgentSession()
       backendSessionId = result.session_id
-      sessionStore.backendSessionIds[targetSessionId] = backendSessionId
-      localStorage.setItem('arknights_rag_backend_sessions', JSON.stringify(sessionStore.backendSessionIds))
+      if (sessionStore.currentSessionId) {
+        sessionStore.backendSessionIds[sessionStore.currentSessionId] = backendSessionId
+        localStorage.setItem('arknights_rag_backend_sessions', JSON.stringify(sessionStore.backendSessionIds))
+      }
     } catch (e) {
       console.error('Failed to create backend session:', e)
       sessionStore.addMessage('assistant', '错误: 无法创建会话，请重试')
-      sessionStore.removeStreamingState(targetSessionId)
+      isLoading.value = false
       return
     }
   }
+
+  let currentRound = 0
+  let currentToolCallMsg = null
 
   try {
     await api.agentChat({
@@ -471,39 +489,47 @@ async function sendMessage() {
       signal: controller.signal,
 
       onNewSessionId(newSid) {
+        // Server auto-created a new session (old one expired)
         console.log('[ChatView] Session expired, server created new session:', newSid)
         backendSessionId = newSid
-        sessionStore.backendSessionIds[targetSessionId] = newSid
-        localStorage.setItem('arknights_rag_backend_sessions', JSON.stringify(sessionStore.backendSessionIds))
+        if (sessionStore.currentSessionId) {
+          sessionStore.backendSessionIds[sessionStore.currentSessionId] = newSid
+          localStorage.setItem('arknights_rag_backend_sessions', JSON.stringify(sessionStore.backendSessionIds))
+        }
       },
 
       onThinkingStart(event) {
-        st.round = event.round || st.round + 1
-        st.thinking = ''
-        st.thinkingTimeMs = 0
-        st.thinkingStartTime = event.timestamp_ms || Date.now()
+        currentRound = event.round || currentRound + 1
+        currentThinking.value = ''
+        currentThinkingTimeMs.value = 0
+        thinkingStartTime.value = event.timestamp_ms || Date.now()
         nextTick(() => scrollToBottom())
       },
 
       onToolCallsStart(event) {
-        if (st.thinking) {
-          const thinkTime = st.thinkingStartTime ? Date.now() - st.thinkingStartTime : 0
-          sessionStore.addThinkingMessage(st.round, st.thinking, Math.round(thinkTime))
-          st.thinking = ''
-          st.thinkingTimeMs = 0
+        // Save any accumulated thinking content as a thinking message
+        if (currentThinking.value) {
+          const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
+          sessionStore.addThinkingMessageTo(streamSessionId, currentRound, currentThinking.value, Math.round(thinkTime))
+          currentThinking.value = ''
+          currentThinkingTimeMs.value = 0
         }
-        st.answer = ''
-        st.round = event.round || st.round + 1
+        // Discard any stray answer content (tool round doesn't produce final answer)
+        currentAnswer.value = ''
+        currentRound = event.round || currentRound + 1
         const calls = event.tool_calls.map(tc => ({
           id: tc.id,
           name: tc.name,
           arguments_summary: summarizeToolArgs(tc.name, tc.arguments),
         }))
-        sessionStore.addToolCallMessage(calls, st.round)
+        sessionStore.addToolCallMessage(calls, currentRound)
+        currentToolCallMsg = calls
         nextTick(() => scrollToBottom())
       },
 
-      onToolExecuting() {
+      onToolExecuting(event) {
+        // A tool has started executing — update UI to show progress
+        // This helps when tool_calls_start and tool_call_result arrive too close together
         nextTick(() => scrollToBottom())
       },
 
@@ -518,53 +544,74 @@ async function sendMessage() {
       },
 
       onAnswerDelta(event) {
-        st.answer += event.delta || ''
+        const delta = event.delta || ''
+        // Backend already parses <think/> tags, so content_delta is pure answer text
+        currentAnswer.value += delta
         nextTick(() => scrollToBottom())
       },
 
       onThinkingDelta(event) {
-        st.thinking += event.content || ''
-        if (st.thinkingStartTime) {
-          st.thinkingTimeMs = Date.now() - st.thinkingStartTime
+        currentThinking.value += event.content || ''
+        if (thinkingStartTime.value) {
+          currentThinkingTimeMs.value = Date.now() - thinkingStartTime.value
         }
         nextTick(() => scrollToBottom())
       },
 
       onAnswerDone(event) {
-        const thinkTime = st.thinkingStartTime ? Date.now() - st.thinkingStartTime : 0
-        if (st.thinking) {
-          sessionStore.addThinkingMessage(st.round, st.thinking, Math.round(thinkTime))
+        const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
+        // Save thinking as independent message if present
+        if (currentThinking.value) {
+          sessionStore.addThinkingMessageTo(streamSessionId, currentRound, currentThinking.value, Math.round(thinkTime))
         }
-        const rawAnswer = event.answer || st.answer
+        // Filter <think/> tags from the final answer
+        const rawAnswer = event.answer || currentAnswer.value
         const { text: cleanAnswer, thinking: trailingThinking } = extractThinkContent(rawAnswer)
-        if (trailingThinking && !st.thinking) {
-          sessionStore.addThinkingMessage(st.round, trailingThinking)
+        if (trailingThinking && !currentThinking.value) {
+          sessionStore.addThinkingMessageTo(streamSessionId, currentRound, trailingThinking)
         }
-        sessionStore.addMessage('assistant', cleanAnswer)
+        // Finalize: add complete answer as assistant message (targets the session that sent the message)
+        sessionStore.addMessageTo(streamSessionId, 'assistant', cleanAnswer)
+        currentAnswer.value = ''
+        currentThinking.value = ''
+        currentThinkingTimeMs.value = 0
+        thinkingStartTime.value = 0
       },
 
       onError(event) {
         console.error('Agent error:', event.message)
-        sessionStore.addMessage('assistant', `错误: ${event.message || '未知错误'}`)
+        sessionStore.addMessageTo(streamSessionId, 'assistant', `错误: ${event.message || '未知错误'}`)
       },
     })
   } catch (error) {
+    // Save partial thinking and answer before clearing
+    const partialThinking = currentThinking.value
+    const partialAnswer = currentAnswer.value
+
+    isLoading.value = false
+    currentThinking.value = ''
+    currentThinkingTimeMs.value = 0
+
     if (error.name === 'AbortError') {
-      console.log('[ChatView] Request aborted for session', targetSessionId)
-      // Partial content was already saved by abortSessionStream()
-      // Just remove streaming state — content was saved
+      console.log('[ChatView] Request aborted')
+      if (partialThinking) {
+        const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
+        sessionStore.addThinkingMessageTo(streamSessionId, currentRound, partialThinking, Math.round(thinkTime))
+      }
+      if (partialAnswer) {
+        sessionStore.addMessageTo(streamSessionId, 'assistant', partialAnswer)
+      }
     } else {
       console.error('[ChatView] Agent chat error:', error)
-      if (st.thinking) {
-        const thinkTime = st.thinkingStartTime ? Date.now() - st.thinkingStartTime : 0
-        sessionStore.addThinkingMessage(st.round, st.thinking, Math.round(thinkTime))
+      if (partialThinking) {
+        sessionStore.addThinkingMessageTo(streamSessionId, currentRound, partialThinking, 0)
       }
-      sessionStore.addMessage('assistant', st.answer || `错误: ${error.message}`)
+      sessionStore.addMessageTo(streamSessionId, 'assistant', partialAnswer || `错误: ${error.message}`)
     }
   }
 
-  // Clean up streaming state for this session (content already saved to messages)
-  sessionStore.removeStreamingState(targetSessionId)
+  abortController.value = null
+  isLoading.value = false
   nextTick(() => scrollToBottom())
 
   // Process queue
@@ -753,12 +800,12 @@ function scrollToBottom() {
 .chat-message.assistant { margin-right: auto; }
 .chat-bubble { padding: var(--spacing-md) var(--spacing-lg); border-radius: var(--radius-lg); position: relative; }
 .chat-message.user .chat-bubble { background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dim) 100%); color: var(--bg-deep); border-bottom-right-radius: var(--radius-sm); }
-.chat-message.assistant .chat-bubble { background: var(--bg-panel); border: 1px solid var(--border-color); border-bottom-left-radius: var(--radius-sm); box-shadow: var(--shadow-sm); }
+.chat-message.assistant .chat-bubble { background: var(--bg-panel); border: 1px solid var(--border-color); border-bottom-left-radius: var(--radius-sm); }
 .chat-role { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: var(--spacing-xs); opacity: 0.7; }
 .chat-text { line-height: 1.6; white-space: pre-wrap; }
 .chat-time { font-size: 0.7rem; opacity: 0.5; margin-top: var(--spacing-xs); text-align: right; }
 /* Thinking card (clickable whole card to expand/collapse) */
-.thinking-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--spacing-sm) var(--spacing-md); max-width: 85%; margin-bottom: var(--spacing-md); animation: fadeSlideIn 0.3s ease-out; margin-right: auto; cursor: pointer; user-select: none; transition: border-color var(--transition-fast); box-shadow: var(--shadow-sm); }
+.thinking-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--spacing-sm) var(--spacing-md); max-width: 85%; margin-bottom: var(--spacing-md); animation: fadeSlideIn 0.3s ease-out; margin-right: auto; cursor: pointer; user-select: none; transition: border-color var(--transition-fast); }
 .thinking-card:hover { border-color: var(--color-primary-dim); }
 .thinking-card-header { display: flex; align-items: center; gap: var(--spacing-sm); }
 .thinking-card-round { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); }
@@ -785,7 +832,7 @@ function scrollToBottom() {
 .pending-idx { font-size: 0.65rem; color: var(--text-dim); font-weight: 600; min-width: 16px; font-family: var(--font-mono); opacity: 0.6; }
 .pending-text { font-size: 0.82rem; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 /* Tool call display */
-.tool-call-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--spacing-md); max-width: 85%; margin-bottom: var(--spacing-md); animation: fadeSlideIn 0.3s ease-out; margin-right: auto; box-shadow: var(--shadow-sm); }
+.tool-call-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--spacing-md); max-width: 85%; margin-bottom: var(--spacing-md); animation: fadeSlideIn 0.3s ease-out; margin-right: auto; }
 .tool-call-header { display: flex; align-items: center; gap: var(--spacing-sm); margin-bottom: var(--spacing-sm); }
 .tool-call-round { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); }
 .tool-call-count { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); }
