@@ -379,18 +379,21 @@ async def agent_loop(
 
                 if etype == STREAM_EVENT_THINKING_DELTA:
                     # Stream reasoning content to frontend immediately
+                    pending_thinking += event["content"]
                     yield format_thinking_delta(event["content"])
+                    await asyncio.sleep(0)
 
                 elif etype == STREAM_EVENT_CONTENT_DELTA:
                     yield format_answer_delta(event["delta"])
+                    await asyncio.sleep(0)
 
                 elif etype == STREAM_EVENT_TOOL_CALLS:
                     # Model decided to use tools
                     tool_calls = event["tool_calls"]
                     final_content = event.get("content", "")
                     final_reasoning = event.get("reasoning_content", "")
-                    if final_reasoning:
-                        yield format_thinking_delta(final_reasoning)
+                    # Don't resend final_reasoning as thinking_delta —
+                    # it was already streamed incrementally above
 
                 elif etype == STREAM_EVENT_DONE:
                     # Model answered directly without tools
@@ -404,12 +407,11 @@ async def agent_loop(
             return
 
         # Signal thinking is done for this round.
-        # Note: if reasoning_content was forwarded as thinking_delta in tool_calls handler,
-        # pending_thinking will be empty and final_reasoning was already sent, so skip duplicate.
-        if tool_calls:
-            if pending_thinking:
-                yield format_thinking_done(pending_thinking, round_num)
-            # Force flush so frontend receives thinking_done before tool_calls_start
+        # Use pending_thinking (accumulated from streaming deltas) as the primary source;
+        # fall back to final_reasoning for models that provide reasoning only in the final chunk.
+        complete_reasoning = pending_thinking or final_reasoning
+        if complete_reasoning:
+            yield format_thinking_done(complete_reasoning, round_num)
             await asyncio.sleep(0)
 
         # Check if model wants to use tools
