@@ -68,18 +68,18 @@ class Session:
             "content": content,
         })
 
-    def get_context_messages(self, max_turns: int = 20) -> List[Dict]:
+    def get_context_messages(self, max_messages: int = 20) -> List[Dict]:
         """Get recent N messages as context for LLM.
 
         Strips any non-standard fields (prefixed with _) before sending to the API.
 
         Keeps original tool_call_ids intact — providers like MiniMax require the
         exact IDs they generated in previous turns to match tool results.
-        
+
         Handles orphaned tool_calls/tool_results that may occur when a streaming
         request is interrupted mid-way (e.g. client aborts while tools are executing).
         """
-        messages = self.messages[-max_turns:]
+        messages = self.messages[-max_messages:]
         
         # ===== Pre-pass: identify valid tool_call IDs =====
         # Collect all tool_call IDs from assistant messages

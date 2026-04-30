@@ -20,8 +20,10 @@ SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY_2", "")
 MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")
+MIMO_API_KEY = os.environ.get("MIMO_API_KEY", "")
 SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+MIMO_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
 
 # Model Settings
 EMBEDDING_MODEL = "Pro/BAAI/bge-m3"

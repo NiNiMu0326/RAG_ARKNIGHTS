@@ -2,9 +2,15 @@ import pickle
 from typing import List
 from pathlib import Path
 from rank_bm25 import BM25Okapi
+import jieba
 
 BASE_DIR = Path(__file__).parent.parent.parent
 CHUNKS_DIR = BASE_DIR / "chunks"
+
+
+def _tokenize(text: str) -> List[str]:
+    """Tokenize Chinese text with jieba, filtering out whitespace-only tokens."""
+    return [t for t in jieba.cut(text) if t.strip()]
 
 
 class BM25Indexer:
@@ -27,9 +33,9 @@ class BM25Indexer:
         """
         self.corpus = corpus
         self.corpus_size = len(corpus)
-        tokenized_corpus = [doc.split() for doc in corpus]
+        tokenized_corpus = [_tokenize(doc) for doc in corpus]
         self.bm25 = BM25Okapi(tokenized_corpus, k1=self.k1, b=self.b)
-        self.doc_lengths = [len(doc.split()) for doc in corpus]
+        self.doc_lengths = [len(_tokenize(doc)) for doc in corpus]
         self.avgdl = sum(self.doc_lengths) / len(self.doc_lengths) if self.doc_lengths else 0
         # Build corpus_ids if not provided (use indices as fallback)
         if corpus_ids is None:
@@ -41,7 +47,7 @@ class BM25Indexer:
         """Retrieve top-k document indices for a query."""
         if not self.bm25 or not query:
             return []
-        tokenized_query = query.split()
+        tokenized_query = _tokenize(query)
         scores = self.bm25.get_scores(tokenized_query)
         top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
         return top_indices

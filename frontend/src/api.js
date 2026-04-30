@@ -7,6 +7,23 @@
 // For production, set VITE_API_BASE environment variable
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
+/**
+ * 获取认证请求头
+ * @param {boolean} withJson - 是否添加 Content-Type: application/json
+ * @returns {Object} 请求头对象
+ */
+function getAuthHeaders(withJson = false) {
+  const token = localStorage.getItem('arknights_rag_token')
+  const headers = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  if (withJson) {
+    headers['Content-Type'] = 'application/json'
+  }
+  return headers
+}
+
 export const api = {
   // ===== Auth APIs =====
 
@@ -37,19 +54,17 @@ export const api = {
   },
 
   async getMe() {
-    const token = localStorage.getItem('arknights_rag_token')
     const response = await fetch(`${API_BASE}/auth/me`, {
-      headers: { 'Authorization': `Bearer ${token}` }
+      headers: getAuthHeaders()
     })
     if (!response.ok) throw new Error('未登录')
     return response.json()
   },
 
   async changePassword(oldPassword, newPassword) {
-    const token = localStorage.getItem('arknights_rag_token')
     const response = await fetch(`${API_BASE}/auth/change-password`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      headers: getAuthHeaders(true),
       body: JSON.stringify({ old_password: oldPassword, new_password: newPassword })
     })
     if (!response.ok) {
@@ -62,28 +77,25 @@ export const api = {
   // ===== Conversation APIs =====
 
   async listConversations() {
-    const token = localStorage.getItem('arknights_rag_token')
     const response = await fetch(`${API_BASE}/conversations`, {
-      headers: { 'Authorization': `Bearer ${token}` }
+      headers: getAuthHeaders()
     })
     if (!response.ok) throw new Error('获取会话列表失败')
     return response.json()
   },
 
   async getConversationMessages(sessionId) {
-    const token = localStorage.getItem('arknights_rag_token')
     const response = await fetch(`${API_BASE}/conversations/${sessionId}/messages`, {
-      headers: { 'Authorization': `Bearer ${token}` }
+      headers: getAuthHeaders()
     })
     if (!response.ok) throw new Error('获取消息失败')
     return response.json()
   },
 
   async syncConversations(conversations) {
-    const token = localStorage.getItem('arknights_rag_token')
     const response = await fetch(`${API_BASE}/conversations/sync`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      headers: getAuthHeaders(true),
       body: JSON.stringify({ conversations })
     })
     if (!response.ok) throw new Error('同步会话失败')
@@ -91,20 +103,19 @@ export const api = {
   },
 
   async deleteConversation(sessionId) {
-    const token = localStorage.getItem('arknights_rag_token')
     const response = await fetch(`${API_BASE}/conversations/${sessionId}`, {
       method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${token}` }
+      headers: getAuthHeaders()
     })
     if (!response.ok) throw new Error('删除会话失败')
     return response.json()
   },
 
   async renameConversation(sessionId, name) {
-    const token = localStorage.getItem('arknights_rag_token')
-    const response = await fetch(`${API_BASE}/conversations/${sessionId}/rename?name=${encodeURIComponent(name)}`, {
+    const response = await fetch(`${API_BASE}/conversations/${sessionId}/rename`, {
       method: 'PUT',
-      headers: { 'Authorization': `Bearer ${token}` }
+      headers: getAuthHeaders(true),
+      body: JSON.stringify({ name })
     })
     if (!response.ok) throw new Error('重命名失败')
     return response.json()

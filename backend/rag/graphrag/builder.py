@@ -12,9 +12,6 @@ class GraphBuilder:
         if entity_relations_path:
             self.entity_relations_path = entity_relations_path
         else:
-            # Use config to get the correct path
-            import sys
-            sys.path.insert(0, str(Path(__file__).parent.parent.parent))
             from backend.config import ENTITY_RELATIONS_FILE
             self.entity_relations_path = str(ENTITY_RELATIONS_FILE)
         self.graph = None
@@ -137,15 +134,21 @@ class GraphBuilder:
 
         return {'incoming': incoming, 'outgoing': outgoing}
 
-    def find_path(self, entity1: str, entity2: str) -> Dict:
+    def find_path(self, entity1: str, entity2: str, max_hops: int = 4) -> Dict:
         """Find shortest path between two entities with edge details.
-        
+
         Path finding treats the graph as undirected (to discover all connections),
         but edge information is extracted from the directed graph with correct directionality.
-        
+
+        Args:
+            entity1: First entity name
+            entity2: Second entity name
+            max_hops: Maximum number of hops (edges) allowed. Default 4.
+                     Paths longer than this are considered meaningless.
+
         Returns:
             Dict with 'path' (list of entity names) and 'edges' (list of edge details).
-            Empty dict values if no path found.
+            Empty dict values if no path found or path exceeds max_hops.
         """
         if self.graph is None:
             self.build()
@@ -158,7 +161,11 @@ class GraphBuilder:
         try:
             # Use undirected view for path finding (discover all connections)
             undirected = self.graph.to_undirected()
-            path = nx.shortest_path(undirected, entity1, entity2)
+            # Use single_source_shortest_path with cutoff to limit path length
+            paths = nx.single_source_shortest_path(undirected, entity1, cutoff=max_hops)
+            if entity2 not in paths:
+                return {"path": [], "edges": []}
+            path = paths[entity2]
             
             # Extract edge details from the directed graph
             edges = []

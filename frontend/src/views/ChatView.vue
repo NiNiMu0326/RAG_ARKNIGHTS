@@ -260,12 +260,14 @@ const currentAnswer = ref('')
 const expandedTools = ref([])
 const expandedThinking = ref([])
 const toolItemRefs = reactive({})
+const currentRound = ref(0)
 const currentThinking = ref('')
 const currentThinkingTimeMs = ref(0)
 const thinkingStartTime = ref(0)
 const messagesContainer = ref(null)
 const messageQueue = ref([])
 const abortController = ref(null)
+const originalSessionId = ref(null)
 
 // Initialize on mount
 onMounted(() => {
@@ -317,10 +319,11 @@ watch(() => sessionStore.currentSessionId, (newId, oldId) => {
       // final answer will land in the correct session even after the user switches away.
       if (isLoading.value && currentThinking.value) {
         const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
-        sessionStore.addThinkingMessageTo(oldId, currentRound, currentThinking.value, Math.round(thinkTime))
+        sessionStore.addThinkingMessageTo(oldId, currentRound.value, currentThinking.value, Math.round(thinkTime))
       }
+      // Save partial answer with a marker so onAnswerDone can replace it
       if (isLoading.value && currentAnswer.value) {
-        sessionStore.addMessageTo(oldId, 'assistant', currentAnswer.value)
+        sessionStore.addMessageTo(oldId, 'assistant', currentAnswer.value + ' [回答中...]', { _partial: true })
       }
       // Clear display refs but do NOT abort — the stream continues in background
       isLoading.value = false
@@ -431,9 +434,7 @@ async function sendMessage() {
   const content = inputText.value.trim()
   if (!content) return
 
-  const streamSessionId = sessionStore.currentSessionId   // captured so callbacks target the right session even after switch
-
-  // If already loading, add to queue (max 2 messages)
+  // If already loading, add to queue (max 20 messages)
   if (isLoading.value) {
     if (messageQueue.value.length < 20) {
       messageQueue.value.push(content)
@@ -449,8 +450,13 @@ async function sendMessage() {
   currentThinking.value = ''
   currentThinkingTimeMs.value = 0
   thinkingStartTime.value = 0
+  currentRound.value = 0
 
   sessionStore.addMessage('user', content)
+
+  // Capture session ID AFTER addMessage (which may create a new session)
+  const streamSessionId = sessionStore.currentSessionId
+  originalSessionId.value = streamSessionId
   nextTick(() => scrollToBottom())
 
   // Create AbortController for cancellation
@@ -478,7 +484,6 @@ async function sendMessage() {
     }
   }
 
-  let currentRound = 0
   let currentToolCallMsg = null
 
   try {
@@ -499,38 +504,34 @@ async function sendMessage() {
       },
 
       onThinkingStart(event) {
-        currentRound = event.round || currentRound + 1
+        currentRound.value = event.round || currentRound.value + 1
         currentThinking.value = ''
         currentThinkingTimeMs.value = 0
         thinkingStartTime.value = event.timestamp_ms || Date.now()
-        nextTick(() => scrollToBottom())
       },
 
       onToolCallsStart(event) {
         // Save any accumulated thinking content as a thinking message
         if (currentThinking.value) {
           const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
-          sessionStore.addThinkingMessageTo(streamSessionId, currentRound, currentThinking.value, Math.round(thinkTime))
+          sessionStore.addThinkingMessageTo(streamSessionId, currentRound.value, currentThinking.value, Math.round(thinkTime))
           currentThinking.value = ''
           currentThinkingTimeMs.value = 0
         }
         // Discard any stray answer content (tool round doesn't produce final answer)
         currentAnswer.value = ''
-        currentRound = event.round || currentRound + 1
+        currentRound.value = event.round || currentRound.value + 1
         const calls = event.tool_calls.map(tc => ({
           id: tc.id,
           name: tc.name,
           arguments_summary: summarizeToolArgs(tc.name, tc.arguments),
         }))
-        sessionStore.addToolCallMessage(calls, currentRound)
+        sessionStore.addToolCallMessage(calls, currentRound.value)
         currentToolCallMsg = calls
-        nextTick(() => scrollToBottom())
       },
 
       onToolExecuting(event) {
-        // A tool has started executing — update UI to show progress
-        // This helps when tool_calls_start and tool_call_result arrive too close together
-        nextTick(() => scrollToBottom())
+        // A tool has started executing — no auto-scroll
       },
 
       onToolCallResult(event) {
@@ -540,14 +541,12 @@ async function sendMessage() {
           tool_name: event.tool_name || '',
           result: event.result || null,
         })
-        nextTick(() => scrollToBottom())
       },
 
       onAnswerDelta(event) {
         const delta = event.delta || ''
         // Backend already parses <think/> tags, so content_delta is pure answer text
         currentAnswer.value += delta
-        nextTick(() => scrollToBottom())
       },
 
       onThinkingDelta(event) {
@@ -555,27 +554,29 @@ async function sendMessage() {
         if (thinkingStartTime.value) {
           currentThinkingTimeMs.value = Date.now() - thinkingStartTime.value
         }
-        nextTick(() => scrollToBottom())
       },
 
       onAnswerDone(event) {
         const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
         // Save thinking as independent message if present
         if (currentThinking.value) {
-          sessionStore.addThinkingMessageTo(streamSessionId, currentRound, currentThinking.value, Math.round(thinkTime))
+          sessionStore.addThinkingMessageTo(streamSessionId, currentRound.value, currentThinking.value, Math.round(thinkTime))
         }
         // Filter <think/> tags from the final answer
         const rawAnswer = event.answer || currentAnswer.value
         const { text: cleanAnswer, thinking: trailingThinking } = extractThinkContent(rawAnswer)
         if (trailingThinking && !currentThinking.value) {
-          sessionStore.addThinkingMessageTo(streamSessionId, currentRound, trailingThinking)
+          sessionStore.addThinkingMessageTo(streamSessionId, currentRound.value, trailingThinking)
         }
-        // Finalize: add complete answer as assistant message (targets the session that sent the message)
-        sessionStore.addMessageTo(streamSessionId, 'assistant', cleanAnswer)
+        // Write complete answer; remove any partial answer the session-switch handler
+        // may have saved (to avoid duplicate assistant messages)
+        sessionStore.replaceLastAssistantIfPartial(streamSessionId, cleanAnswer)
         currentAnswer.value = ''
         currentThinking.value = ''
         currentThinkingTimeMs.value = 0
         thinkingStartTime.value = 0
+        // Scroll to bottom when answer is complete
+        nextTick(() => scrollToBottom())
       },
 
       onError(event) {
@@ -596,15 +597,15 @@ async function sendMessage() {
       console.log('[ChatView] Request aborted')
       if (partialThinking) {
         const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
-        sessionStore.addThinkingMessageTo(streamSessionId, currentRound, partialThinking, Math.round(thinkTime))
+        sessionStore.addThinkingMessageTo(streamSessionId, currentRound.value, partialThinking, Math.round(thinkTime))
       }
       if (partialAnswer) {
-        sessionStore.addMessageTo(streamSessionId, 'assistant', partialAnswer)
+        sessionStore.addMessageTo(streamSessionId, 'assistant', partialAnswer + ' [已中断]')
       }
     } else {
       console.error('[ChatView] Agent chat error:', error)
       if (partialThinking) {
-        sessionStore.addThinkingMessageTo(streamSessionId, currentRound, partialThinking, 0)
+        sessionStore.addThinkingMessageTo(streamSessionId, currentRound.value, partialThinking, 0)
       }
       sessionStore.addMessageTo(streamSessionId, 'assistant', partialAnswer || `错误: ${error.message}`)
     }
@@ -614,8 +615,8 @@ async function sendMessage() {
   isLoading.value = false
   nextTick(() => scrollToBottom())
 
-  // Process queue
-  if (messageQueue.value.length > 0) {
+  // Only process queue if still on the original session
+  if (messageQueue.value.length > 0 && sessionStore.currentSessionId === originalSessionId.value) {
     const nextContent = messageQueue.value.shift()
     inputText.value = nextContent
     sendMessage()
@@ -691,7 +692,7 @@ async function loadQuickQuestionsData() {
 
 async function refreshQuickActions() {
   console.log('[ChatView] refreshQuickActions called')
-  // 添加旋转动画效果
+  // Play rotation animation
   const refreshIcon = document.querySelector('.refresh-icon');
   if (refreshIcon) {
     refreshIcon.classList.remove('rotating');
@@ -701,28 +702,7 @@ async function refreshQuickActions() {
       refreshIcon.classList.remove('rotating');
     }, 600);
   }
-
-  try {
-    const res = await api.getQuickQuestions();
-    const questions = res.questions || [];
-    if (questions.length > 0) {
-      quickQuestionsStore.setQuickActions(questions);
-      console.log('快速问题已刷新:', questions);
-    } else {
-      throw new Error('Empty questions');
-    }
-  } catch (error) {
-    console.error('刷新快速问题失败:', error);
-    // fallback
-    const fallbackActions = [
-      { label: '银灰技能', question: '银灰的技能是什么？', type: 'skill' },
-      { label: '陈/史尔特尔', question: '陈和史尔特尔的关系', type: 'relation' },
-      { label: '伊芙利特背景', question: '伊芙利特背景故事', type: 'background' },
-      { label: '靶向药物故事', question: '靶向药物故事内容', type: 'story' },
-      { label: '阿米娅别名', question: '阿米娅别名有什么', type: 'alias' }
-    ];
-    quickQuestionsStore.setQuickActions(fallbackActions);
-  }
+  await loadQuickQuestionsData()
 }
 
 let _scrollRafId = null

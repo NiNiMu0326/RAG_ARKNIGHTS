@@ -13,7 +13,7 @@ from typing import AsyncGenerator, Dict, List, Any, Optional, Tuple
 from backend.agent.sessions import Session, SessionManager
 from backend.agent.prompts import build_messages
 from backend.agent.tools import ToolRegistry, get_tool_registry
-from backend.api.deepseek import DeepSeekClient, ChatResponse, ToolCall, STREAM_EVENT_THINKING_DELTA, STREAM_EVENT_CONTENT_DELTA, STREAM_EVENT_TOOL_CALLS, STREAM_EVENT_DONE
+from backend.api.deepseek import ToolCall, STREAM_EVENT_THINKING_DELTA, STREAM_EVENT_CONTENT_DELTA, STREAM_EVENT_TOOL_CALLS, STREAM_EVENT_DONE
 from backend.api.llm_factory import get_llm_client, get_model_info, DEFAULT_MODEL
 from backend import config
 
@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 
 # ===== SSE Event Formatters =====
+
+def _sse_event(event_type: str, **kwargs) -> str:
+    """通用 SSE 事件格式化函数"""
+    data = json.dumps({"type": event_type, **kwargs}, ensure_ascii=False)
+    return f"data: {data}\n\n"
+
 
 def format_tool_calls_start(tool_calls: List[ToolCall], round_num: int) -> str:
     """Format tool_calls_start SSE event."""
@@ -35,79 +41,58 @@ def format_tool_calls_start(tool_calls: List[ToolCall], round_num: int) -> str:
             "name": tc.name,
             "arguments": args,
         })
-    data = json.dumps({
-        "type": "tool_calls_start",
-        "round": round_num,
-        "tool_calls": tool_calls_list,
-    }, ensure_ascii=False)
-    return f"data: {data}\n\n"
+    return _sse_event("tool_calls_start", round=round_num, tool_calls=tool_calls_list)
+
+
+def _summarize_tool_result(result: Any) -> str:
+    """从工具结果生成摘要"""
+    if isinstance(result, list):
+        return f"返回 {len(result)} 条结果"
+    if not isinstance(result, dict):
+        return str(result)[:100] if result else "完成"
+
+    if result.get("error"):
+        return f"错误: {result['error']}"
+    if result.get("found") is False:
+        return result.get("message", "未找到结果")
+    if result.get("mode") == "path":
+        path = result.get("path", [])
+        edges = result.get("edges", [])
+        if not path:
+            return "无路径"
+        if edges:
+            edge_strs = [
+                f"{e.get('from','')}--{e.get('relation','')}-->{e.get('to','')}"
+                + (f" ({e.get('description','')})" if e.get("description") else "")
+                for e in edges
+            ]
+            return f"路径: {' → '.join(path)} | 边: {'; '.join(edge_strs)}"
+        return f"路径: {' → '.join(path)}"
+    if result.get("mode") == "neighbors":
+        return f"找到 {len(result.get('neighbors', []))} 个关联实体"
+    return "查询完成"
 
 
 def format_tool_call_result(tool_call_id: str, result: Any, time_ms: float = 0, tool_name: str = "") -> str:
     """Format tool_call_result SSE event."""
-    # Generate summary from result
-    if isinstance(result, list):
-        summary = f"返回 {len(result)} 条结果"
-    elif isinstance(result, dict):
-        if result.get("error"):
-            summary = f"错误: {result['error']}"
-        elif result.get("found") is False:
-            summary = result.get("message", "未找到结果")
-        elif result.get("mode") == "path":
-            path = result.get("path", [])
-            edges = result.get("edges", [])
-            if path:
-                # Build detailed path summary with edge relations
-                if edges:
-                    edge_strs = []
-                    for e in edges:
-                        rel = e.get("relation", "")
-                        desc = e.get("description", "")
-                        if desc:
-                            edge_strs.append(f"{e.get('from','')}--{rel}-->{e.get('to','')} ({desc})")
-                        else:
-                            edge_strs.append(f"{e.get('from','')}--{rel}-->{e.get('to','')}")
-                    summary = f"路径: {' → '.join(path)} | 边: {'; '.join(edge_strs)}"
-                else:
-                    summary = f"路径: {' → '.join(path)}"
-            else:
-                summary = "无路径"
-        elif result.get("mode") == "neighbors":
-            neighbors = result.get("neighbors", [])
-            summary = f"找到 {len(neighbors)} 个关联实体"
-        else:
-            summary = "查询完成"
-    else:
-        summary = str(result)[:100] if result else "完成"
-
-    data = json.dumps({
-        "type": "tool_call_result",
-        "tool_call_id": tool_call_id,
-        "tool_name": tool_name,
-        "summary": summary,
-        "time_ms": round(time_ms),
-        "result": result,
-    }, ensure_ascii=False)
-    return f"data: {data}\n\n"
+    return _sse_event(
+        "tool_call_result",
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        summary=_summarize_tool_result(result),
+        time_ms=round(time_ms),
+        result=result,
+    )
 
 
 def format_tool_executing(tool_call_id: str, tool_name: str) -> str:
     """Format tool_executing SSE event — sent when a tool starts executing."""
-    data = json.dumps({
-        "type": "tool_executing",
-        "tool_call_id": tool_call_id,
-        "tool_name": tool_name,
-    }, ensure_ascii=False)
-    return f"data: {data}\n\n"
+    return _sse_event("tool_executing", tool_call_id=tool_call_id, tool_name=tool_name)
 
 
 def format_answer_delta(delta: str) -> str:
     """Format answer_delta SSE event (streaming token)."""
-    data = json.dumps({
-        "type": "answer_delta",
-        "delta": delta,
-    }, ensure_ascii=False)
-    return f"data: {data}\n\n"
+    return _sse_event("answer_delta", delta=delta)
 
 
 def strip_think_tags(text: str) -> Tuple[str, str]:
@@ -139,21 +124,12 @@ def strip_think_tags(text: str) -> Tuple[str, str]:
 
 def format_thinking_delta(content: str) -> str:
     """Format thinking_delta SSE event (LLM reasoning content)."""
-    data = json.dumps({
-        "type": "thinking_delta",
-        "content": content,
-    }, ensure_ascii=False)
-    return f"data: {data}\n\n"
+    return _sse_event("thinking_delta", content=content)
 
 
 def format_thinking_start(round_num: int = 1, timestamp_ms: float = 0) -> str:
     """Format thinking_start SSE event — sent at the beginning of each LLM call."""
-    data = json.dumps({
-        "type": "thinking_start",
-        "round": round_num,
-        "timestamp_ms": timestamp_ms,
-    }, ensure_ascii=False)
-    return f"data: {data}\n\n"
+    return _sse_event("thinking_start", round=round_num, timestamp_ms=timestamp_ms)
 
 
 def format_thinking_done(reasoning_content: str = "", round_num: int = 1) -> str:
@@ -163,31 +139,17 @@ def format_thinking_done(reasoning_content: str = "", round_num: int = 1) -> str
     provided as a fallback when thinking_delta streaming might have been incomplete.
     Frontend should use this to replace any partial thinking accumulated via delta events.
     """
-    data = json.dumps({
-        "type": "thinking_done",
-        "round": round_num,
-        "reasoning_content": reasoning_content,
-    }, ensure_ascii=False)
-    return f"data: {data}\n\n"
+    return _sse_event("thinking_done", round=round_num, reasoning_content=reasoning_content)
 
 
 def format_answer_done(full_content: str, metrics: Dict = None) -> str:
     """Format answer_done SSE event."""
-    data = json.dumps({
-        "type": "answer_done",
-        "answer": full_content,
-        "metrics": metrics or {},
-    }, ensure_ascii=False)
-    return f"data: {data}\n\n"
+    return _sse_event("answer_done", answer=full_content, metrics=metrics or {})
 
 
 def format_error(error_msg: str) -> str:
     """Format error SSE event."""
-    data = json.dumps({
-        "type": "error",
-        "message": error_msg,
-    }, ensure_ascii=False)
-    return f"data: {data}\n\n"
+    return _sse_event("error", message=error_msg)
 
 
 # ===== Prompt Injection Detection =====
@@ -328,10 +290,6 @@ async def agent_loop(
         logger.warning(f"[INJECTION] Potential prompt injection detected in session {session_id}")
         session.add_message("system", SECURITY_NOTICE)
 
-    if await session_manager.get_session(session.session_id) is None:
-        # Extremely unlikely: session was cleaned up between creation and now
-        yield format_error("会话创建失败，请重试")
-        return
     messages = build_messages(session)
     logger.info(f"[SESSION] session={session_id} user_message={user_message[:100]}")
 
@@ -425,7 +383,7 @@ async def agent_loop(
             session.add_message("assistant", clean_content, **msg_kwargs)
 
             total_ms = round((time.time() - loop_start) * 1000)
-            logger.info(f"[ANSWER] session={session_id} rounds={round_num - 1} total_time={total_ms}ms content_len={len(clean_content)}")
+            logger.info(f"[ANSWER] session={session_id} rounds={round_num - 1} total_time={total_ms}ms content_len={len(clean_content)} final_content_len={len(final_content)}")
             yield format_answer_done(clean_content, metrics={
                 "total_time_ms": total_ms,
                 "num_tool_rounds": round_num - 1,

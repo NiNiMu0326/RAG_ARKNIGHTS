@@ -75,6 +75,26 @@ export const useSessionStore = defineStore('sessions', () => {
     }
   }
 
+  function _serializeSessionsForSync(sessionsObj) {
+    return Object.values(sessionsObj).map(s => ({
+      session_id: s.id,
+      name: s.name || '',
+      created_at: new Date(s.createdAt).toISOString(),
+      updated_at: new Date(s.updatedAt).toISOString(),
+      messages: (s.messages || []).map(m => ({
+        role: m.role,
+        content: m.content,
+        metadata: {
+          timestamp: m.timestamp,
+          ...(m.results ? { results: m.results } : {}),
+          ...(m.round ? { round: m.round } : {}),
+          ...(m.calls ? { calls: m.calls } : {})
+        },
+        created_at: new Date(m.timestamp).toISOString(),
+      }))
+    }))
+  }
+
   async function saveSessions() {
     const toSave = {}
     Object.keys(sessions.value).forEach(id => {
@@ -93,24 +113,7 @@ export const useSessionStore = defineStore('sessions', () => {
     const authStore = useAuthStore()
     if (authStore.isLoggedIn) {
       try {
-        const convs = Object.values(toSave).map(s => ({
-          session_id: s.id,
-          name: s.name || '',
-          created_at: new Date(s.createdAt).toISOString(),
-          updated_at: new Date(s.updatedAt).toISOString(),
-          messages: (s.messages || []).map(m => ({
-            role: m.role,
-            content: m.content,
-            metadata: {
-              timestamp: m.timestamp,
-              ...(m.results ? { results: m.results } : {}),
-              ...(m.round ? { round: m.round } : {}),
-              ...(m.calls ? { calls: m.calls } : {})
-            },
-            created_at: new Date(m.timestamp).toISOString(),
-          }))
-        }))
-        await api.syncConversations(convs)
+        await api.syncConversations(_serializeSessionsForSync(toSave))
       } catch (e) {
         console.warn('Failed to sync sessions to server:', e)
       }
@@ -125,7 +128,7 @@ export const useSessionStore = defineStore('sessions', () => {
     }
 
     // Create frontend session with isEmpty flag (won't show in sidebar until first message)
-    const id = 'session_' + Date.now()
+    const id = 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8)
     sessions.value[id] = {
       id,
       name: '',
@@ -213,7 +216,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
     // If current session doesn't exist, create it
     if (!targetSessionId || !sessions.value[targetSessionId]) {
-      targetSessionId = 'session_' + Date.now()
+      targetSessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8)
       sessions.value[targetSessionId] = {
         id: targetSessionId,
         name: '',
@@ -267,6 +270,22 @@ export const useSessionStore = defineStore('sessions', () => {
     const session = sessions.value[sessionId]
     if (!session) return
     session.messages.push({ role, content, timestamp: Date.now(), ...extra })
+    session.updatedAt = Date.now()
+    saveSessions()
+  }
+
+  // Replace the last assistant message if it was a partial save from session switch,
+  // otherwise append normally. Prevents duplicate answers when streaming across session switches.
+  function replaceLastAssistantIfPartial(sessionId, content, extra = {}) {
+    const session = sessions.value[sessionId]
+    if (!session) return
+    const msgs = session.messages
+    const last = msgs[msgs.length - 1]
+    if (last && last.role === 'assistant' && last._partial) {
+      msgs[msgs.length - 1] = { role: 'assistant', content, timestamp: Date.now(), ...extra }
+    } else {
+      msgs.push({ role: 'assistant', content, timestamp: Date.now(), ...extra })
+    }
     session.updatedAt = Date.now()
     saveSessions()
   }
@@ -329,24 +348,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
     if (Object.keys(toSave).length > 0) {
       try {
-        const convs = Object.values(toSave).map(s => ({
-          session_id: s.id,
-          name: s.name || '',
-          created_at: new Date(s.createdAt).toISOString(),
-          updated_at: new Date(s.updatedAt).toISOString(),
-          messages: (s.messages || []).map(m => ({
-            role: m.role,
-            content: m.content,
-            metadata: {
-              timestamp: m.timestamp,
-              ...(m.results ? { results: m.results } : {}),
-              ...(m.round ? { round: m.round } : {}),
-              ...(m.calls ? { calls: m.calls } : {})
-            },
-            created_at: new Date(m.timestamp).toISOString(),
-          }))
-        }))
-        await api.syncConversations(convs)
+        await api.syncConversations(_serializeSessionsForSync(toSave))
       } catch (e) {
         console.warn('Failed to merge local sessions to server:', e)
       }
@@ -388,6 +390,7 @@ export const useSessionStore = defineStore('sessions', () => {
     addMessage,
     addThinkingMessage,
     addMessageTo,
+    replaceLastAssistantIfPartial,
     addThinkingMessageTo,
     addToolCallMessage,
     updateToolCallResult,

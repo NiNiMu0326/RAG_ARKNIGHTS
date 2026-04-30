@@ -20,7 +20,8 @@ class LRUCache:
                     return None
             # Move to end (most recently used)
             self._cache.move_to_end(key)
-            return self._cache[key]['value'] if self._ttl_seconds else self._cache[key]
+            entry = self._cache[key]
+            return entry['value'] if isinstance(entry, dict) else entry
         return None
 
     def set(self, key: str, value: str) -> None:
@@ -64,57 +65,29 @@ class ParentDocumentRetriever:
         self._stories_index_timestamp = None
         self._INDEX_CACHE_TTL = 3600  # 1 hour TTL
 
-    def _build_operators_index(self) -> Dict[int, str]:
-        """Build mapping from operator index to source filename.
+    def _build_source_index(self, source: str, cache_attr: str, ts_attr: str) -> Dict[int, str]:
+        """Build mapping from document index to source filename.
 
         Files are sorted alphabetically and indexed starting from 1.
-        So operators_0001 corresponds to the first file alphabetically.
+        Cached per-source with configurable TTL.
         """
         current_time = time.time()
+        cached = getattr(self, cache_attr, None)
+        cached_ts = getattr(self, ts_attr, None)
+        if cached is not None and cached_ts is not None and current_time - cached_ts < self._INDEX_CACHE_TTL:
+            return cached
 
-        # Check if cache is still valid
-        if (self._operators_index_cache is not None and
-            self._operators_index_timestamp is not None and
-            current_time - self._operators_index_timestamp < self._INDEX_CACHE_TTL):
-            return self._operators_index_cache
+        source_dir = Path(self.data_dir) / source
+        if not source_dir.exists():
+            setattr(self, cache_attr, {})
+            setattr(self, ts_attr, current_time)
+            return {}
 
-        operators_dir = Path(self.data_dir) / 'operators'
-        if not operators_dir.exists():
-            self._operators_index_cache = {}
-            self._operators_index_timestamp = current_time
-            return self._operators_index_cache
-
-        # Get all .md files sorted alphabetically
-        files = sorted([f.name for f in operators_dir.glob('*.md') if f.name.endswith('.md')])
-
-        # Build index: 1-based index -> filename
-        self._operators_index_cache = {i + 1: f for i, f in enumerate(files)}
-        self._operators_index_timestamp = current_time
-        return self._operators_index_cache
-
-    def _build_stories_index(self) -> Dict[int, str]:
-        """Build mapping from story index to source filename."""
-        current_time = time.time()
-
-        # Check if cache is still valid
-        if (self._stories_index_cache is not None and
-            self._stories_index_timestamp is not None and
-            current_time - self._stories_index_timestamp < self._INDEX_CACHE_TTL):
-            return self._stories_index_cache
-
-        stories_dir = Path(self.data_dir) / 'stories'
-        if not stories_dir.exists():
-            self._stories_index_cache = {}
-            self._stories_index_timestamp = current_time
-            return self._stories_index_cache
-
-        # Get all .md files sorted alphabetically
-        files = sorted([f.name for f in stories_dir.glob('*.md') if f.name.endswith('.md')])
-
-        # Build index: 1-based index -> filename
-        self._stories_index_cache = {i + 1: f for i, f in enumerate(files)}
-        self._stories_index_timestamp = current_time
-        return self._stories_index_cache
+        files = sorted([f.name for f in source_dir.glob('*.md') if f.name.endswith('.md')])
+        index = {i + 1: f for i, f in enumerate(files)}
+        setattr(self, cache_attr, index)
+        setattr(self, ts_attr, current_time)
+        return index
 
     def _get_parent_file(self, chunk_id: str, source: str) -> str:
         """Map a chunk_id to its source file name.
@@ -142,9 +115,9 @@ class ParentDocumentRetriever:
             return None
 
         if source == 'operators':
-            index_map = self._build_operators_index()
+            index_map = self._build_source_index('operators', '_operators_index_cache', '_operators_index_timestamp')
         elif source == 'stories':
-            index_map = self._build_stories_index()
+            index_map = self._build_source_index('stories', '_stories_index_cache', '_stories_index_timestamp')
         else:
             return None
 

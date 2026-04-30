@@ -2,14 +2,10 @@
 MultiChannelRetriever: BM25 + FAISS Vector + RRF across 3 collections.
 Wraps the existing hybrid_search logic as a LangChain BaseRetriever.
 """
-import sys
 import time
 import hashlib
 import logging
 import warnings
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 

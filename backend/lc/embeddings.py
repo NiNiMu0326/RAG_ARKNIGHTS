@@ -2,10 +2,6 @@
 SiliconFlow Embeddings for LangChain.
 Wraps the SiliconFlow bge-m3 API as a LangChain Embeddings class.
 """
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
 from typing import List
 from langchain_core.embeddings import Embeddings
 from backend import config

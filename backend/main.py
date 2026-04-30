@@ -15,6 +15,7 @@ from typing import List, Optional, Dict, Any
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -47,26 +48,32 @@ from backend.agent.sessions import SessionManager
 from backend.agent.core import agent_loop
 from backend.api.llm_factory import get_available_models, DEFAULT_MODEL
 
+# ============== Lifespan ==============
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if not config.SILICONFLOW_API_KEY:
+        raise RuntimeError("SILICONFLOW_API_KEY 环境变量未设置，拒绝启动。请在 .env 中配置。")
+    await init_db()
+    yield
+
+
 # ============== FastAPI App ==============
 app = FastAPI(
     title="Arknights RAG API",
     description="Backend API for Arknights RAG System",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
-# CORS
+# CORS — restrict origins in production via ALLOWED_ORIGINS env var (comma-separated)
+_allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5300,http://localhost:8100").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in _allowed_origins if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def startup():
-    await init_db()
 
 
 # Request logging middleware
@@ -476,11 +483,20 @@ async def delete_conversation(session_id: str, user: dict = Depends(get_current_
         await db.close()
 
 
+class RenameRequest(BaseModel):
+    name: str
+
+    @field_validator('name')
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError('会话名称不能为空')
+        return v.strip()
+
+
 @app.put("/conversations/{session_id}/rename")
-async def rename_conversation(session_id: str, name: str = "", user: dict = Depends(get_current_user)):
+async def rename_conversation(session_id: str, req: RenameRequest, user: dict = Depends(get_current_user)):
     """Rename a conversation."""
-    if not name or not name.strip():
-        raise HTTPException(status_code=422, detail="会话名称不能为空")
     if not user:
         raise HTTPException(status_code=401, detail="未登录")
     db = await get_db()
@@ -489,7 +505,7 @@ async def rename_conversation(session_id: str, name: str = "", user: dict = Depe
         row = await cursor.fetchone()
         if not row or row["user_id"] != user["user_id"]:
             raise HTTPException(status_code=404, detail="会话不存在")
-        await db.execute("UPDATE conversations SET name = ? WHERE session_id = ?", (name, session_id))
+        await db.execute("UPDATE conversations SET name = ? WHERE session_id = ?", (req.name, session_id))
         await db.commit()
         return {"status": "ok"}
     finally:
@@ -672,10 +688,10 @@ async def get_quick_questions():
                             visited[neighbor] = visited[current] + 1
                             queue.append(neighbor)
 
-                # 在可达的干员节点中选择（排除自身），距离越近概率越高
+                # 在可达的干员节点中选择（排除自身），限制3跳以内
                 reachable_operators = [
                     (n, dist) for n, dist in visited.items()
-                    if n != node_a and n in operator_nodes
+                    if n != node_a and n in operator_nodes and dist <= 3
                 ]
 
                 if not reachable_operators:
@@ -874,8 +890,5 @@ async def get_stories():
 
 # ============== Run Server ==============
 if __name__ == "__main__":
-    # Validate critical environment variables
-    if not config.SILICONFLOW_API_KEY:
-        raise RuntimeError("SILICONFLOW_API_KEY 环境变量未设置，拒绝启动。请在 .env 中配置。")
     port = int(os.environ.get("PORT", 8100))
     uvicorn.run(app, host="0.0.0.0", port=port)

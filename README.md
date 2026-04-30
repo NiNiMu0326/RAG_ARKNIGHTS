@@ -5,7 +5,7 @@
 ## 功能特性
 
 - **AI Agent 自主决策**：LLM 通过 Function Calling 自主选择工具、并行执行、判断信息充足性，最多 8 轮工具调用
-- **多 LLM 模型支持**：DeepSeek-V4-Flash、MiniMax-M2.5/M2.7，通过 llm\_factory 统一调度
+- **多 LLM 模型支持**：DeepSeek-V4-Flash、MiniMax-M2.7、MiMo-V2.5-Pro，通过 llm\_factory 统一调度
 - **知识库检索**：FAISS 向量 + BM25 关键词混合检索 → RRF 融合 → Cross-Encoder 重排 → Parent Document 扩展
 - **知识图谱查询（GraphRAG）**：NetworkX 有向图，支持单实体邻居查询和双实体最短路径查找
 - **网络搜索**：Tavily API + DuckDuckGo 兜底，补充外部实时信息
@@ -46,6 +46,7 @@ cp .env.example .env
 - `DEEPSEEK_API_KEY_2` - DeepSeek 官方模型
 - `TAVILY_API_KEY` - 网络搜索（不填则使用 DuckDuckGo 兜底）
 - `MINIMAX_API_KEY` - MiniMax 模型
+- `MIMO_API_KEY` - MiMo 模型
 
 ### 3. 前端
 
@@ -113,7 +114,7 @@ Agent 自主循环：每轮 LLM 返回工具调用时并行执行，结果加入
 │   ├── api/                     # API 客户端封装
 │   │   ├── deepseek.py          # OpenAI 兼容客户端（Chat + FC + 流式）
 │   │   ├── llm_factory.py       # 多 Provider LLM 工厂
-│   │   ├── siliconflow.py       # SiliconFlow API（嵌入 + 重排 + LLM）
+│   │   ├── siliconflow.py       # SiliconFlow API（嵌入 + 重排）
 │   │   └── web_search.py        # 网络搜索（Tavily + DuckDuckGo）
 │   ├── rag/                     # RAG 底层基础设施
 │   │   ├── retrievers.py        # 多通道检索（FAISS + BM25 + RRF），5h 缓存
@@ -210,7 +211,7 @@ Agent 自主循环：每轮 LLM 返回工具调用时并行执行，结果加入
 | 组件        | 技术                                                      |
 | --------- | ------------------------------------------------------- |
 | 后端框架      | FastAPI + Uvicorn                                       |
-| Agent LLM | DeepSeek-V3.2 / MiniMax-M2.5/M2.7（通过 llm\_factory 统一调度） |
+| Agent LLM | DeepSeek-V4-Flash / MiniMax-M2.7 / MiMo-V2.5-Pro（通过 llm\_factory 统一调度） |
 | 向量数据库     | FAISS                                                   |
 | 嵌入模型      | BAAI/bge-m3（SiliconFlow）                                |
 | 重排模型      | BAAI/bge-reranker-v2-m3（SiliconFlow）                    |

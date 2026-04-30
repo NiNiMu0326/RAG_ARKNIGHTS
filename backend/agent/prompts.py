@@ -44,5 +44,5 @@ def build_messages(session) -> list:
     system_content = SYSTEM_PROMPT
 
     messages = [{"role": "system", "content": system_content}]
-    messages.extend(session.get_context_messages(max_turns=20))
+    messages.extend(session.get_context_messages(max_messages=20))
     return messages

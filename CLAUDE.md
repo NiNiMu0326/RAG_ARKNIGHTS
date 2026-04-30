@@ -49,12 +49,11 @@
 
 | model_id | Provider | 显示名称 |
 |----------|----------|----------|
-| `siliconflow-deepseek-v3` | SiliconFlow | DeepSeek-V3.2 (硅基流动) |
-| `deepseek-chat` | DeepSeek | DeepSeek-V3.2 (DeepSeek官方) |
-| `minimax-m2.5` | MiniMax | MiniMax-M2.5 |
+| `deepseek-chat` | DeepSeek | DeepSeek-V4-Flash (DeepSeek官方) |
 | `minimax-m2.7` | MiniMax | MiniMax-M2.7 |
+| `mimo-v2.5-pro` | MiMo | MiMo-V2.5-Pro (小米) |
 
-默认模型：`siliconflow-deepseek-v3`
+默认模型：`minimax-m2.7`
 
 ### 会话管理（`backend/agent/sessions.py`）
 
@@ -215,7 +214,8 @@
 | `JWT_SECRET` | 是 | JWT 签名密钥，不设置则服务拒绝启动 |
 | `DEEPSEEK_API_KEY_2` | 否 | DeepSeek 官方模型 API Key |
 | `TAVILY_API_KEY` | 否 | Tavily 网络搜索，不填则 DuckDuckGo 兜底 |
-| `MINIMAX_API_KEY` | 否 | MiniMax M2.5/M2.7 模型 |
+| `MINIMAX_API_KEY` | 否 | MiniMax M2.7 模型 |
+| `MIMO_API_KEY` | 否 | MiMo V2.5 Pro 模型 |
 | `PORT` | 否 | 后端端口，默认 8100 |
 
 ## 开发注意事项
@@ -248,7 +248,7 @@ Agent 流式对话使用以下 SSE 事件，按时间顺序：
 | 组件 | 技术 |
 |------|------|
 | 后端框架 | FastAPI + Uvicorn |
-| Agent LLM | DeepSeek-V3.2 / MiniMax-M2.5/M2.7（OpenAI 兼容 API） |
+| Agent LLM | DeepSeek-V4-Flash / MiniMax-M2.7（OpenAI 兼容 API） |
 | 向量数据库 | FAISS（内存索引 + 磁盘持久化） |
 | 嵌入模型 | BAAI/bge-m3（SiliconFlow API） |
 | 重排模型 | BAAI/bge-reranker-v2-m3（SiliconFlow API） |

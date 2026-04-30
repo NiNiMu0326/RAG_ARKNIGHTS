@@ -1,8 +1,5 @@
-import sys
 import warnings
 import threading
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from typing import List, Dict, Optional
 from backend.rag.graphrag.builder import GraphBuilder
 

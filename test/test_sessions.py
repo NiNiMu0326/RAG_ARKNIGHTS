@@ -105,11 +105,11 @@ class TestSessionGetContextMessages:
         assert "tool_calls" in ctx[0]
         assert ctx[1]["tool_call_id"] == "call_1"
 
-    def test_max_turns_limits_output(self):
+    def test_max_messages_limits_output(self):
         s = Session(session_id="test-1")
         for i in range(30):
             s.add_message("user", f"msg{i}")
-        ctx = s.get_context_messages(max_turns=20)
+        ctx = s.get_context_messages(max_messages=20)
         assert len(ctx) == 20
         assert ctx[0]["content"] == "msg10"
 

@@ -9,7 +9,7 @@ import pytest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.api.deepseek import DeepSeekClient, ToolCall, ChatResponse
+from backend.api.deepseek import DeepSeekClient, ToolCall
 from backend.api.deepseek import STREAM_EVENT_THINKING_DELTA, STREAM_EVENT_CONTENT_DELTA
 from backend.api.deepseek import STREAM_EVENT_TOOL_CALLS, STREAM_EVENT_DONE
 
@@ -39,24 +39,6 @@ class TestToolCall:
         assert d["id"] == "c1"
         assert d["type"] == "function"
         assert d["function"]["name"] == "search"
-
-
-class TestChatResponse:
-    def test_content_only(self):
-        r = ChatResponse(content="hello")
-        assert r.content == "hello"
-        assert r.has_tool_calls is False
-        assert r.tool_calls is None
-
-    def test_with_tool_calls(self):
-        tc = ToolCall(id="c1", name="search", arguments="{}")
-        r = ChatResponse(content="using tool", tool_calls=[tc])
-        assert r.has_tool_calls is True
-
-    def test_empty(self):
-        r = ChatResponse()
-        assert r.content == ""
-        assert r.has_tool_calls is False
 
 
 # ============================================================

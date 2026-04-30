@@ -103,12 +103,12 @@ async def execute_graphrag_search(arguments: Dict[str, Any]) -> Dict:
             return {"error": "知识图谱未加载，关系查询不可用"}
 
         if entity1 and entity2:
-            # Two-entity path mode
-            result = builder.find_path(entity1, entity2)
+            # Two-entity path mode (max 3 hops to avoid meaningless long paths)
+            result = builder.find_path(entity1, entity2, max_hops=3)
             if not result.get("path"):
                 return {
                     "found": False,
-                    "message": f"未找到 '{entity1}' 和 '{entity2}' 之间的关系路径",
+                    "message": f"未找到 '{entity1}' 和 '{entity2}' 之间的直接关系路径（3跳以内）",
                     "entity1": entity1,
                     "entity2": entity2,
                 }
@@ -187,17 +187,16 @@ def _get_bm25_indexes():
     import threading
     if _bm25_lock is None:
         _bm25_lock = threading.Lock()
-    
+
     if _bm25_indexes is not None:
         return _bm25_indexes
+
+    from backend.data.bm25_index import BM25Indexer
+    from backend import config
 
     with _bm25_lock:
         if _bm25_indexes is not None:
             return _bm25_indexes
-
-        from backend.data.bm25_index import BM25Indexer
-        from backend import config
-        from pathlib import Path
 
         indexes = {}
         for name in ["operators", "stories", "knowledge"]:
@@ -206,9 +205,9 @@ def _get_bm25_indexes():
                 indexes[name] = BM25Indexer.load(path)
                 logger.info(f"Loaded BM25 index: {name}")
             except FileNotFoundError:
-                warnings.warn(f"BM25 index not found for '{name}'")
+                logger.warning(f"BM25 index file not found for '{name}', collection will be unavailable. Run: python backend/data/bm25_index.py")
             except Exception as e:
-                warnings.warn(f"Failed to load BM25 index for '{name}': {e}")
+                logger.error(f"Failed to load BM25 index for '{name}': {e}")
 
         _bm25_indexes = indexes
         return _bm25_indexes

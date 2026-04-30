@@ -3,21 +3,14 @@ DeepSeek Official API client for LLM chat.
 Uses DeepSeek's official API instead of SiliconFlow for better response speed.
 """
 
-import sys
 import json
 import time
 import logging
 import asyncio
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from typing import List, Dict, Any, Optional
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
 from backend import config
+from backend.api.base import create_http_session
 
 # Event types yielded by chat_with_tools_stream
 STREAM_EVENT_THINKING_DELTA = "thinking_delta"
@@ -50,18 +43,86 @@ class ToolCall:
         }
 
 
-class ChatResponse:
-    """Response from chat completion, may contain content and/or tool_calls."""
-    def __init__(self, content: Optional[str] = None, tool_calls: Optional[List[ToolCall]] = None,
-                 finish_reason: str = "", reasoning_content: str = ""):
-        self.content = content or ""
-        self.tool_calls = tool_calls
-        self.finish_reason = finish_reason
-        self.reasoning_content = reasoning_content or ""
+# ===== Think-tag stream parser =====
+# MiniMax-M2.x models embed reasoning inside <think...>...</think> tags
+# within the content field. This parser separates those tags from real content
+# in a streaming fashion, emitting each fragment as (type, text).
 
-    @property
-    def has_tool_calls(self) -> bool:
-        return bool(self.tool_calls)
+import re as _re
+
+_THINK_OPEN_RE = _re.compile(r'<think[^>]*>', _re.IGNORECASE)
+_THINK_CLOSE_RE = _re.compile(r'</think\s*>', _re.IGNORECASE)
+_THINK_SELFCLOSE_RE = _re.compile(r'<think\s*/>', _re.IGNORECASE)
+
+
+class ThinkTagParser:
+    """Streaming parser that separates <think>...</think> blocks from plain content."""
+
+    def __init__(self):
+        self._buf = ""
+        self._in_tag = False
+
+    def feed(self, chunk: str):
+        """Feed a chunk; yields ('think', text) or ('content', text) fragments."""
+        self._buf += chunk
+        while self._buf:
+            if self._in_tag:
+                m = _THINK_CLOSE_RE.search(self._buf)
+                if m is not None:
+                    if m.start() > 0:
+                        yield ('think', self._buf[:m.start()])
+                    self._buf = self._buf[m.end():]
+                    self._in_tag = False
+                else:
+                    # No closing tag yet; hold back suffix in case </think is split
+                    keep = _partial_suffix_len(self._buf, '</think', 7)
+                    if keep > 0:
+                        if len(self._buf) > keep:
+                            yield ('think', self._buf[:-keep])
+                        self._buf = self._buf[-keep:]
+                    else:
+                        yield ('think', self._buf)
+                        self._buf = ""
+                    break
+            else:
+                # Check for self-closing <think/> first
+                sm = _THINK_SELFCLOSE_RE.search(self._buf)
+                if sm is not None:
+                    if sm.start() > 0:
+                        yield ('content', self._buf[:sm.start()])
+                    self._buf = self._buf[sm.end():]
+                    continue
+
+                om = _THINK_OPEN_RE.search(self._buf)
+                if om is not None:
+                    if om.start() > 0:
+                        yield ('content', self._buf[:om.start()])
+                    self._buf = self._buf[om.end():]
+                    self._in_tag = True
+                else:
+                    keep = _partial_suffix_len(self._buf, '<think', 6)
+                    if keep > 0:
+                        if len(self._buf) > keep:
+                            yield ('content', self._buf[:-keep])
+                        self._buf = self._buf[-keep:]
+                    else:
+                        yield ('content', self._buf)
+                        self._buf = ""
+                    break
+
+    def flush(self):
+        """Flush remaining buffer after stream ends."""
+        if self._buf:
+            yield ('think' if self._in_tag else 'content', self._buf)
+            self._buf = ""
+
+
+def _partial_suffix_len(s: str, prefix: str, max_len: int) -> int:
+    """If s ends with a prefix of `prefix`, return its length; else 0."""
+    for n in range(min(len(s), max_len), 0, -1):
+        if prefix[:n] == s[-n:]:
+            return n
+    return 0
 
 
 class DeepSeekClient:
@@ -82,151 +143,7 @@ class DeepSeekClient:
         self.disable_thinking = False  # Set True for models where deep thinking is overkill (e.g. MiniMax M2.7)
 
         # Create session with connection pooling and retry logic
-        self._session = requests.Session()
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["POST", "GET"]
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=20)
-        self._session.mount("http://", adapter)
-        self._session.mount("https://", adapter)
-
-    def chat(self, messages: List[Dict[str, str]], model: str = None,
-             temperature: float = 0.7, **kwargs) -> str:
-        """
-        Send chat completion request to DeepSeek.
-
-        Args:
-            messages: List of message dicts with "role" and "content" keys.
-            model: LLM model to use. Defaults to config DEEPSEEK_LLM_MODEL.
-            temperature: Sampling temperature. Defaults to 0.7.
-            **kwargs: Additional arguments passed to the API.
-
-        Returns:
-            Assistant message content string.
-        """
-        model = model or self.model
-        url = f"{self.base_url}/chat/completions"
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            **kwargs
-        }
-
-        response = self._session.post(url, headers=headers, json=payload, timeout=120)
-        if response.status_code != 200:
-            try:
-                err_data = response.json()
-                err_msg = err_data.get("error", {}).get("message", response.text[:300])
-            except ValueError:
-                err_msg = response.text[:300]
-            logger.error(f"[API ERROR] {response.status_code} from {url}: {err_msg}")
-            raise Exception(f"{response.status_code} Error: {err_msg}")
-
-        try:
-            result = response.json()
-        except ValueError:
-            raise Exception(f"Invalid JSON response from {url}: {response.text[:200]}")
-        return result["choices"][0]["message"]["content"]
-
-    def chat_with_tools(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: List[Dict] = None,
-        model: str = None,
-        temperature: float = 0.3,
-        **kwargs,
-    ) -> ChatResponse:
-        """Send chat completion with tool support (Function Calling).
-        
-        IMPORTANT: Do NOT pass parallel_tool_calls parameter.
-        DeepSeek-chat natively supports parallel tool_calls without it,
-        and passing it makes the model MORE conservative (returns fewer parallel calls).
-        
-        Args:
-            messages: List of message dicts. May include role="tool" messages.
-            tools: List of tool definitions in OpenAI function calling format.
-            model: LLM model. Defaults to config.
-            temperature: Sampling temperature. Lower for more deterministic tool usage.
-            **kwargs: Additional API arguments.
-            
-        Returns:
-            ChatResponse with content and/or tool_calls.
-        """
-        model = model or self.model
-        url = f"{self.base_url}/chat/completions"
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-        }
-        
-        if tools:
-            payload["tools"] = tools
-
-        if self.disable_thinking:
-            payload["thinking"] = {"type": "disabled"}
-
-        payload.update(kwargs)
-
-        logger.info(f"[API CALL] POST {url} model={model} messages={len(messages)} tools={len(tools) if tools else 0}")
-        response = self._session.post(url, headers=headers, json=payload, timeout=120)
-        if response.status_code != 200:
-            try:
-                err_data = response.json()
-                err_msg = err_data.get("error", {}).get("message", response.text[:300])
-            except ValueError:
-                err_msg = response.text[:300]
-            logger.error(f"[API ERROR] {response.status_code} from {url}: {err_msg}")
-            raise Exception(f"{response.status_code} Error: {err_msg}")
-
-        try:
-            result = response.json()
-        except ValueError:
-            raise Exception(f"Invalid JSON response from {url}: {response.text[:200]}")
-
-        choice = result["choices"][0]
-        message = choice["message"]
-        content = message.get("content") or ""
-        finish_reason = choice.get("finish_reason", "")
-
-        # Extract reasoning_content if present (DeepSeek reasoner models)
-        reasoning_content = message.get("reasoning_content") or ""
-
-        # Parse tool_calls if present
-        tool_calls = None
-        raw_tool_calls = message.get("tool_calls")
-        if raw_tool_calls:
-            tool_calls = []
-            for tc in raw_tool_calls:
-                fn = tc.get("function", {})
-                tool_calls.append(ToolCall(
-                    id=tc.get("id", ""),
-                    name=fn.get("name", ""),
-                    arguments=fn.get("arguments", "{}"),
-                ))
-
-        return ChatResponse(
-            content=content,
-            tool_calls=tool_calls,
-            finish_reason=finish_reason,
-            reasoning_content=reasoning_content,
-        )
+        self._session = create_http_session()
 
     async def chat_with_tools_stream(
         self,
@@ -279,11 +196,8 @@ class DeepSeekClient:
         tool_calls_map = {}  # index -> {id, name, arguments_str}
         finish_reason = ""
 
-        # State machine for parsing <think/> tags in content delta
-        # Some models (MiniMax-M2.x) embed reasoning inside <think...</think > tags
-        # in the content field instead of using the reasoning_content field.
-        in_think_tag = False
-        think_buffer = ""  # Buffer for detecting <think and </think > across chunks
+        # Streaming parser for <think/> tags embedded in content (MiniMax models)
+        tag_parser = ThinkTagParser()
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
             async with client.stream("POST", url, headers=headers, json=payload) as resp:
@@ -330,90 +244,15 @@ class DeepSeekClient:
                     # Content delta — parse <think/> tags for models like MiniMax
                     content_delta = delta.get("content")
                     if content_delta:
-                        think_buffer += content_delta
-                        # Process the buffer — may contain thinking tags and/or content
-                        while think_buffer:
-                            if in_think_tag:
-                                # Inside <think...> — look for </think closing tag
-                                close_idx = think_buffer.find("</think")
-                                if close_idx != -1:
-                                    thinking_chunk = think_buffer[:close_idx]
-                                    if thinking_chunk:
-                                        reasoning_content_parts.append(thinking_chunk)
-                                        for i in range(0, len(thinking_chunk), STREAM_CHUNK_SIZE):
-                                            yield {"type": STREAM_EVENT_THINKING_DELTA, "content": thinking_chunk[i:i+STREAM_CHUNK_SIZE]}
-                                    rest = think_buffer[close_idx:]
-                                    close_end = rest.find(">")
-                                    if close_end != -1:
-                                        think_buffer = rest[close_end + 1:]
-                                        in_think_tag = False
-                                        # Continue loop to process remaining content (now in content mode)
-                                    else:
-                                        think_buffer = rest
-                                        break
-                                else:
-                                    # No closing tag yet — check for partial "</think" at end
-                                    partial_len = 0
-                                    for i in range(1, min(len(think_buffer), 8) + 1):
-                                        if "</think"[:i] == think_buffer[-i:]:
-                                            partial_len = i
-                                    if partial_len > 0:
-                                        emit_part = think_buffer[:-partial_len]
-                                        if emit_part:
-                                            reasoning_content_parts.append(emit_part)
-                                            for i in range(0, len(emit_part), STREAM_CHUNK_SIZE):
-                                                yield {"type": STREAM_EVENT_THINKING_DELTA, "content": emit_part[i:i+STREAM_CHUNK_SIZE]}
-                                        think_buffer = think_buffer[-partial_len:]
-                                        break
-                                    else:
-                                        reasoning_content_parts.append(think_buffer)
-                                        for i in range(0, len(think_buffer), STREAM_CHUNK_SIZE):
-                                            yield {"type": STREAM_EVENT_THINKING_DELTA, "content": think_buffer[i:i+STREAM_CHUNK_SIZE]}
-                                        think_buffer = ""
-                                        break
+                        for frag_type, frag_text in tag_parser.feed(content_delta):
+                            if frag_type == 'think':
+                                reasoning_content_parts.append(frag_text)
+                                for i in range(0, len(frag_text), STREAM_CHUNK_SIZE):
+                                    yield {"type": STREAM_EVENT_THINKING_DELTA, "content": frag_text[i:i+STREAM_CHUNK_SIZE]}
                             else:
-                                # Not inside <think...> — look for opening <think tag
-                                open_idx = think_buffer.find("<think")
-                                if open_idx != -1:
-                                    before = think_buffer[:open_idx]
-                                    if before:
-                                        content_parts.append(before)
-                                        for i in range(0, len(before), STREAM_CHUNK_SIZE):
-                                            yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": before[i:i+STREAM_CHUNK_SIZE]}
-                                    rest = think_buffer[open_idx:]
-                                    import re
-                                    self_close_match = re.match(r"<think\s*/>", rest)
-                                    if self_close_match:
-                                        think_buffer = rest[self_close_match.end():]
-                                    else:
-                                        gt_idx = rest.find(">")
-                                        if gt_idx != -1:
-                                            think_buffer = rest[gt_idx + 1:]
-                                            in_think_tag = True
-                                        else:
-                                            break
-                                else:
-                                    # No <think tag — check for partial "<think" at end
-                                    partial_start = -1
-                                    for i in range(min(len(think_buffer), 6)):
-                                        suffix = think_buffer[-(i+1):]
-                                        if "<think"[:i+1] == suffix:
-                                            partial_start = len(think_buffer) - (i+1)
-                                            break
-                                    if partial_start >= 0:
-                                        before = think_buffer[:partial_start]
-                                        if before:
-                                            content_parts.append(before)
-                                            for i in range(0, len(before), STREAM_CHUNK_SIZE):
-                                                yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": before[i:i+STREAM_CHUNK_SIZE]}
-                                        think_buffer = think_buffer[partial_start:]
-                                        break
-                                    else:
-                                        content_parts.append(think_buffer)
-                                        for i in range(0, len(think_buffer), STREAM_CHUNK_SIZE):
-                                            yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": think_buffer[i:i+STREAM_CHUNK_SIZE]}
-                                        think_buffer = ""
-                                        break
+                                content_parts.append(frag_text)
+                                for i in range(0, len(frag_text), STREAM_CHUNK_SIZE):
+                                    yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": frag_text[i:i+STREAM_CHUNK_SIZE]}
 
                     # Tool calls delta
                     tc_deltas = delta.get("tool_calls")
@@ -435,19 +274,16 @@ class DeepSeekClient:
                             if fn.get("arguments"):
                                 entry["arguments_str"] += fn["arguments"]
 
-        # Flush any remaining think_buffer content after stream ends
-        if think_buffer:
-            if in_think_tag:
-                # Still in think tag at end of stream — treat as thinking
-                reasoning_content_parts.append(think_buffer)
-                for i in range(0, len(think_buffer), STREAM_CHUNK_SIZE):
-                    yield {"type": STREAM_EVENT_THINKING_DELTA, "content": think_buffer[i:i+STREAM_CHUNK_SIZE]}
+        # Flush any remaining parser buffer after stream ends
+        for frag_type, frag_text in tag_parser.flush():
+            if frag_type == 'think':
+                reasoning_content_parts.append(frag_text)
+                for i in range(0, len(frag_text), STREAM_CHUNK_SIZE):
+                    yield {"type": STREAM_EVENT_THINKING_DELTA, "content": frag_text[i:i+STREAM_CHUNK_SIZE]}
             else:
-                # Not in think tag — treat as answer content
-                content_parts.append(think_buffer)
-                for i in range(0, len(think_buffer), STREAM_CHUNK_SIZE):
-                    yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": think_buffer[i:i+STREAM_CHUNK_SIZE]}
-            think_buffer = ""
+                content_parts.append(frag_text)
+                for i in range(0, len(frag_text), STREAM_CHUNK_SIZE):
+                    yield {"type": STREAM_EVENT_CONTENT_DELTA, "delta": frag_text[i:i+STREAM_CHUNK_SIZE]}
 
         # Build final results
         full_content = "".join(content_parts)

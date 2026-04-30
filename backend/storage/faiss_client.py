@@ -2,11 +2,8 @@
 FAISS vector index wrapper for building and querying FAISS indexes.
 Each collection (operators, stories, knowledge) has its own index file + metadata pkl.
 """
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import pickle
+from pathlib import Path
 import numpy as np
 from typing import List, Dict, Optional, Tuple
 

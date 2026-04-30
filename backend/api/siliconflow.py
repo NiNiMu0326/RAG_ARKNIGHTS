@@ -1,18 +1,12 @@
 """
-SiliconFlow API client for embedding, reranking, and LLM chat.
+SiliconFlow API client for embedding and reranking.
+Used for bge-m3 embeddings and bge-reranker-v2-m3 reranking.
 """
-
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from typing import List, Dict, Any
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
 from backend import config
+from backend.api.base import create_http_session
 
 
 class SiliconFlowClient:
@@ -32,16 +26,7 @@ class SiliconFlowClient:
         self.embedding_model = config.EMBEDDING_MODEL
         self.reranker_model = config.RERANKER_MODEL
         # Create session with connection pooling and retry logic
-        self._session = requests.Session()
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["POST", "GET"]
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=20)
-        self._session.mount("http://", adapter)
-        self._session.mount("https://", adapter)
+        self._session = create_http_session()
 
     def embed(self, texts: List[str], model: str = None) -> List[List[float]]:
         """
