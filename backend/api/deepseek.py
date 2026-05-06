@@ -199,7 +199,7 @@ class DeepSeekClient:
         # Streaming parser for <think/> tags embedded in content (MiniMax models)
         tag_parser = ThinkTagParser()
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0), proxy=None, trust_env=False) as client:
             async with client.stream("POST", url, headers=headers, json=payload) as resp:
                 if resp.status_code != 200:
                     body = await resp.aread()

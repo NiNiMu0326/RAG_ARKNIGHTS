@@ -196,6 +196,12 @@
             <div v-for="(msg, idx) in messageQueue" :key="`${msg.role || 'pending'}-${idx}`" class="pending-message">
               <span class="pending-idx">{{ idx + 1 }}</span>
               <span class="pending-text">{{ msg }}</span>
+              <button class="pending-action" @click="editQueuedMessage(idx)" title="编辑">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              </button>
+              <button class="pending-action pending-delete" @click="deleteQueuedMessage(idx)" title="删除">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+              </button>
             </div>
           </div>
         </div>
@@ -415,6 +421,22 @@ function extractThinkContent(text) {
 
 function clearMessageQueue() {
   messageQueue.value = []
+}
+
+function deleteQueuedMessage(idx) {
+  messageQueue.value.splice(idx, 1)
+}
+
+function editQueuedMessage(idx) {
+  inputText.value = messageQueue.value[idx]
+  messageQueue.value.splice(idx, 1)
+  nextTick(() => {
+    const textarea = document.querySelector('.chat-input')
+    if (textarea) {
+      textarea.focus()
+      autoResize({ target: textarea })
+    }
+  })
 }
 
 function autoResize(e) {
@@ -691,7 +713,7 @@ async function loadQuickQuestionsData() {
       { label: '陈/史尔特尔', question: '陈和史尔特尔的关系', type: 'relation' },
       { label: '伊芙利特背景', question: '伊芙利特背景故事', type: 'background' },
       { label: '靶向药物故事', question: '靶向药物故事内容', type: 'story' },
-      { label: '阿米娅别名', question: '阿米娅别名有什么', type: 'alias' }
+      { label: '阿米娅别名', question: '阿米娅的其他名称有哪些', type: 'alias' }
     ];
     quickQuestionsStore.setQuickActions(fallbackActions);
   } finally {
@@ -821,6 +843,10 @@ function scrollToBottom() {
 .pending-message { display: flex; align-items: center; gap: var(--spacing-sm); padding: var(--spacing-xs) var(--spacing-sm); border-radius: var(--radius-sm); background: var(--bg-dark); }
 .pending-idx { font-size: 0.65rem; color: var(--text-dim); font-weight: 600; min-width: 16px; font-family: var(--font-mono); opacity: 0.6; }
 .pending-text { font-size: 0.82rem; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.pending-action { background: none; border: none; color: var(--text-dim); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; opacity: 0; transition: opacity var(--transition-fast), color var(--transition-fast); }
+.pending-message:hover .pending-action { opacity: 1; }
+.pending-action:hover { color: var(--text-secondary); }
+.pending-delete:hover { color: #e74c3c; }
 /* Tool call display */
 .tool-call-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--spacing-md); max-width: 85%; margin-bottom: var(--spacing-md); animation: fadeSlideIn 0.3s ease-out; margin-right: auto; }
 .tool-call-header { display: flex; align-items: center; gap: var(--spacing-sm); margin-bottom: var(--spacing-sm); }

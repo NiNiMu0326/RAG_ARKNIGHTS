@@ -805,27 +805,30 @@ async def get_quick_questions():
             "type": "enemy",
         })
 
-    # ===== 5. 别名问题：从 operators 文件夹获取干员名 =====
+    # ===== 5. 别名问题：只选有别名（其他名称）的干员 =====
     try:
-        operators_dir = DATA_DIR / "operators"
-        if operators_dir.exists():
-            op_names = []
-            for f in operators_dir.glob("*.md"):
-                with open(f, 'r', encoding='utf-8') as fh:
-                    first_line = fh.readline().strip()
-                    if first_line.startswith('# '):
-                        op_names.append(first_line[2:].strip())
-            if op_names:
-                chosen = random.choice(op_names)
-                questions.append({
-                    "label": f"{chosen}别名",
-                    "question": f"{chosen}别名有什么",
-                    "type": "alias",
-                })
+        # 从 ALIAS_MAP 反转：标准名 → [别名列表]，只保留有2个以上别名的
+        from collections import defaultdict
+        name_to_aliases = defaultdict(set)
+        for alias, standard in ALIAS_MAP.items():
+            name_to_aliases[standard].add(alias)
+        # 只保留有"其他名称"的干员（别名数 >= 2，即除标准名外还有别的叫法）
+        operators_with_aliases = [
+            name for name, aliases in name_to_aliases.items()
+            if len(aliases) >= 2
+        ]
+        if operators_with_aliases:
+            chosen = random.choice(operators_with_aliases)
+            aliases = sorted(name_to_aliases[chosen])
+            questions.append({
+                "label": f"{chosen}别名",
+                "question": f"{chosen}的其他名称有哪些",
+                "type": "alias",
+            })
     except Exception:
         questions.append({
             "label": "银灰别名",
-            "question": "银灰别名有什么",
+            "question": "银灰的其他名称有哪些",
             "type": "alias",
         })
 
