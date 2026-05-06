@@ -4,7 +4,7 @@
 
 ## 功能特性
 
-- **AI Agent 自主决策**：LLM 通过 Function Calling 自主选择工具、并行执行、判断信息充足性，最多 8 轮工具调用
+- **AI Agent 自主决策**：LLM 通过 Function Calling 自主选择工具、并行执行、判断信息充足性，最多 15 轮工具调用
 - **多 LLM 模型支持**：DeepSeek-V4-Flash、MiniMax-M2.7、MiMo-V2.5-Pro，通过 llm\_factory 统一调度
 - **知识库检索**：FAISS 向量 + BM25 关键词混合检索 → RRF 融合 → Cross-Encoder 重排 → Parent Document 扩展
 - **知识图谱查询（GraphRAG）**：NetworkX 有向图，支持单实体邻居查询和双实体最短路径查找
@@ -83,7 +83,7 @@ cd frontend && npm run dev
                                                 流式输出最终回答
 ```
 
-Agent 自主循环：每轮 LLM 返回工具调用时并行执行，结果加入消息历史继续下一轮，直到模型认为信息充足或达到 8 轮上限。
+Agent 自主循环：每轮 LLM 返回工具调用时并行执行，结果加入消息历史继续下一轮，直到模型认为信息充足或达到 15 轮上限。
 
 **三个工具：**
 
@@ -93,7 +93,7 @@ Agent 自主循环：每轮 LLM 返回工具调用时并行执行，结果加入
 | `arknights_graphrag_search` | 知识图谱查询 | 单实体邻居 / 双实体最短路径                         |
 | `web_search`                | 网络搜索   | Tavily + DuckDuckGo                     |
 
-**安全机制：** 最大 8 轮硬限制、循环检测（最近 3 轮相同 tool\_calls）、LLM 最大输出 token 限制
+**安全机制：** 最大 15 轮硬限制、循环检测（最近 3 轮相同 tool\_calls）、LLM 最大输出 token 限制
 
 ## 项目结构
 
@@ -215,6 +215,7 @@ Agent 自主循环：每轮 LLM 返回工具调用时并行执行，结果加入
 | 向量数据库     | FAISS                                                   |
 | 嵌入模型      | BAAI/bge-m3（SiliconFlow）                                |
 | 重排模型      | BAAI/bge-reranker-v2-m3（SiliconFlow）                    |
+| 中文分词      | jieba（BM25 索引构建）                                        |
 | 网络搜索      | Tavily + DuckDuckGo                                     |
 | 知识图谱      | NetworkX DiGraph                                        |
 | 数据库       | SQLite（aiosqlite）                                       |
