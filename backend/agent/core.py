@@ -235,7 +235,7 @@ def detect_loop(messages: List[Dict], window: int = 3) -> bool:
 
 # ===== Tool Execution =====
 
-async def execute_tool(registry: ToolRegistry, tool_call: ToolCall) -> Any:
+async def execute_tool(registry: ToolRegistry, tool_call: ToolCall, session_id: str = "") -> Any:
     """Execute a single tool call and return the result."""
     try:
         args = json.loads(tool_call.arguments)
@@ -244,7 +244,7 @@ async def execute_tool(registry: ToolRegistry, tool_call: ToolCall) -> Any:
 
     logger.info(f"[TOOL EXEC] {tool_call.name} args={json.dumps(args, ensure_ascii=False)[:200]}")
     try:
-        result = await registry.execute(tool_call.name, args)
+        result = await registry.execute(tool_call.name, args, session_id=session_id)
         logger.info(f"[TOOL EXEC DONE] {tool_call.name} result_type={type(result).__name__}")
         return result
     except Exception as e:
@@ -409,7 +409,7 @@ async def agent_loop(
         async def _execute_with_timing(tc: ToolCall):
             """Execute a single tool and return (result, time_ms)."""
             start = time.time()
-            result = await execute_tool(registry, tc)
+            result = await execute_tool(registry, tc, session_id=session_id)
             elapsed = (time.time() - start) * 1000
             return result, elapsed
 

@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 logger = logging.getLogger(__name__)
 
 
-async def execute_rag_search(arguments: Dict[str, Any]) -> List[Dict]:
+async def execute_rag_search(arguments: Dict[str, Any], session_id: str = "") -> List[Dict]:
     """Execute arknights_rag_search tool.
     
     Internal pipeline: MultiChannelRetriever → SiliconFlowReranker → ParentDocumentRetriever
@@ -96,7 +96,7 @@ async def execute_rag_search(arguments: Dict[str, Any]) -> List[Dict]:
         return [{"error": f"检索失败: {str(e)}"}]
 
 
-async def execute_graphrag_search(arguments: Dict[str, Any]) -> Dict:
+async def execute_graphrag_search(arguments: Dict[str, Any], session_id: str = "") -> Dict:
     """Execute arknights_graphrag_search tool.
     
     Supports two modes:
@@ -157,8 +157,12 @@ async def execute_graphrag_search(arguments: Dict[str, Any]) -> Dict:
         return {"error": f"关系查询失败: {str(e)}"}
 
 
-async def execute_web_search(arguments: Dict[str, Any]) -> List[Dict]:
-    """Execute web_search tool using Tavily + DuckDuckGo."""
+async def execute_web_search(arguments: Dict[str, Any], session_id: str = "") -> List[Dict]:
+    """Execute web_search tool using Tavily + DuckDuckGo.
+
+    Deduplicates results against previously returned URLs within the same session,
+    so the LLM doesn't see the same links across multiple rounds.
+    """
     query = arguments.get("query", "")
     if not query:
         return [{"error": "query parameter is required"}]
@@ -171,14 +175,29 @@ async def execute_web_search(arguments: Dict[str, Any]) -> List[Dict]:
         if not results:
             return [{"message": "未找到相关网络搜索结果", "query": query}]
 
-        return [
-            {
+        # Get or create the seen-URL set for this session
+        if session_id:
+            seen = _web_search_seen.setdefault(session_id, set())
+        else:
+            seen = set()
+
+        deduped = []
+        for r in results:
+            url = r.get("url", "")
+            content = (r.get("snippet") or r.get("content", ""))[:300]
+            # Deduplicate by URL, fallback to content prefix
+            key = url if url else content[:200]
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            deduped.append({
                 "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "content": (r.get("snippet") or r.get("content", ""))[:500],
-            }
-            for r in results
-        ]
+                "url": url,
+                "content": content[:500],
+            })
+
+        return deduped if deduped else [{"message": "未找到相关网络搜索结果（其余结果已在之前返回）", "query": query}]
 
     except Exception as e:
         logger.error(f"Web search failed: {e}", exc_info=True)
@@ -191,6 +210,14 @@ async def execute_web_search(arguments: Dict[str, Any]) -> List[Dict]:
 
 _bm25_indexes = None
 _bm25_lock = None
+
+# Web search dedup: session_id -> set of seen URLs/content keys
+_web_search_seen: Dict[str, set] = {}
+
+
+def clear_web_search_seen(session_id: str) -> None:
+    """Clear web search dedup state for a session. Call when session expires."""
+    _web_search_seen.pop(session_id, None)
 
 
 def _get_bm25_indexes():

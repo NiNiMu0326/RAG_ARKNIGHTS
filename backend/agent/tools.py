@@ -98,13 +98,13 @@ class ToolRegistry:
         """Get all tool schemas for API calls."""
         return TOOL_SCHEMAS
 
-    async def execute(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def execute(self, tool_name: str, arguments: Dict[str, Any], session_id: str = "") -> Any:
         """Execute a tool by name with the given arguments."""
         executor = self._tools.get(tool_name)
         if executor is None:
             raise ValueError(f"Unknown tool: {tool_name}")
 
-        return await executor(arguments)
+        return await executor(arguments, session_id=session_id)
 
 
 # ===== Singleton Registry =====

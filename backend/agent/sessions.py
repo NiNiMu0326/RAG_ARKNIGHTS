@@ -156,6 +156,7 @@ class SessionManager:
             if len(self._sessions) >= self._max_sessions:
                 oldest_id = min(self._sessions, key=lambda k: self._sessions[k].created_at)
                 del self._sessions[oldest_id]
+                self._evict_web_search_seen(oldest_id)
                 logger.info(f"[SESSION] Evicted oldest session: {oldest_id}")
 
             session_id = str(uuid.uuid4())[:8]
@@ -186,6 +187,12 @@ class SessionManager:
         async with self._lock:
             self._sessions.pop(session_id, None)
             logger.info(f"Deleted session: {session_id}")
+        # Clean up web search dedup state
+        try:
+            from backend.agent.tool_implementations import clear_web_search_seen
+            clear_web_search_seen(session_id)
+        except ImportError:
+            pass
 
     async def _maybe_cleanup(self):
         """Periodically clean up expired sessions."""
@@ -203,7 +210,18 @@ class SessionManager:
                 del self._sessions[sid]
 
         if expired:
+            for sid in expired:
+                self._evict_web_search_seen(sid)
             logger.info(f"Cleaned up {len(expired)} expired sessions")
+
+    @staticmethod
+    def _evict_web_search_seen(session_id: str):
+        """Remove web search dedup state for a session."""
+        try:
+            from backend.agent.tool_implementations import clear_web_search_seen
+            clear_web_search_seen(session_id)
+        except ImportError:
+            pass
 
     async def get_active_count(self) -> int:
         """Return number of active sessions."""
