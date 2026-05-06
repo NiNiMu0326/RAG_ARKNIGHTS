@@ -260,7 +260,7 @@ async def agent_loop(
     user_message: str,
     session_manager: SessionManager,
     model_id: str = None,
-    max_rounds: int = 8,
+    max_rounds: int = 15,
 ) -> AsyncGenerator[str, None]:
     """Agent main loop with parallel Function Calling support.
     
