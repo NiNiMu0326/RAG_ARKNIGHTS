@@ -62,7 +62,6 @@
         <div class="settings-section">
           <h3>关于系统</h3>
           <div class="about-info" v-if="stats">
-            <div class="about-item"><span>版本</span><span>1.0.0</span></div>
             <div class="about-item"><span>状态</span><span class="status-online">在线</span></div>
             <div class="about-item"><span>当前模型</span><span>{{ currentModelDisplayName }}</span></div>
             <div class="about-item"><span>干员数据</span><span>{{ stats.operators }} 条</span></div>
@@ -71,7 +70,6 @@
             <div class="about-item"><span>关系数据</span><span>{{ stats.relations }} 条</span></div>
           </div>
           <div class="about-info" v-else>
-            <div class="about-item"><span>版本</span><span>1.0.0</span></div>
             <div class="about-item"><span>状态</span><span class="status-offline">离线</span></div>
           </div>
         </div>
