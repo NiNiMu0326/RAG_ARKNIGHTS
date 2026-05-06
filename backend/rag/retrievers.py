@@ -184,17 +184,19 @@ class MultiChannelRetriever(BaseRetriever):
     class Config:
         arbitrary_types_allowed = True
 
-    def __init__(self, **data):
-        super().__init__(**data)
-        self._faiss_client = FAISSClientWrapper(
+    def model_post_init(self, __context: Any) -> None:
+        """Initialize private attributes after Pydantic model init."""
+        object.__setattr__(self, '_faiss_client', FAISSClientWrapper(
             index_dir=self.faiss_index_dir or config.FAISS_INDEX_DIR_STR
-        )
-        self._vector_stores = {}
+        ))
+        object.__setattr__(self, '_vector_stores', {})
 
     def _get_vector_store(self, collection_name: str):
         """Lazily load and cache a LangChain FAISS vector store."""
-        if collection_name not in self._vector_stores:
-            vs = self._faiss_client.to_langchain_faiss(
+        _vector_stores = object.__getattribute__(self, '_vector_stores')
+        if collection_name not in _vector_stores:
+            _faiss_client = object.__getattribute__(self, '_faiss_client')
+            vs = _faiss_client.to_langchain_faiss(
                 collection_name, self.embeddings
             )
             if vs is None:
@@ -202,8 +204,8 @@ class MultiChannelRetriever(BaseRetriever):
                     f"FAISS index for '{collection_name}' not found. "
                     f"Run: python build_faiss_index.py --force"
                 )
-            self._vector_stores[collection_name] = vs
-        return self._vector_stores[collection_name]
+            _vector_stores[collection_name] = vs
+        return _vector_stores[collection_name]
 
     def _bm25_only_search(
         self,
