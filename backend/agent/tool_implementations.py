@@ -77,6 +77,18 @@ async def execute_rag_search(arguments: Dict[str, Any]) -> List[Dict]:
                 "chunk_id": chunk_id,
             })
 
+        # Deduplicate results after parent document expansion:
+        # Multiple chunks from the same parent doc produce identical expanded content.
+        # Keep the first occurrence (highest reranker score) for each unique content.
+        seen_content = set()
+        deduped = []
+        for r in results:
+            content_key = r["content"][:300]
+            if content_key not in seen_content:
+                seen_content.add(content_key)
+                deduped.append(r)
+        results = deduped
+
         return results
 
     except Exception as e:
