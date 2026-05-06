@@ -184,11 +184,8 @@ class MultiChannelRetriever(BaseRetriever):
     class Config:
         arbitrary_types_allowed = True
 
-    _faiss_client: Any = pydantic.PrivateAttr(default=None)
-    _vector_stores: Dict[str, Any] = pydantic.PrivateAttr(default_factory=dict)
-
-    def model_post_init(self, __context: Any) -> None:
-        """Initialize private attributes after Pydantic model init."""
+    def __init__(self, **data):
+        super().__init__(**data)
         self._faiss_client = FAISSClientWrapper(
             index_dir=self.faiss_index_dir or config.FAISS_INDEX_DIR_STR
         )
