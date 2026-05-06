@@ -745,7 +745,7 @@ async def get_quick_questions():
         if operators_file.exists():
             with open(operators_file, 'r', encoding='utf-8') as f:
                 operators_data = json.load(f)
-            op_names = [op['干员名'] for op in operators_data if '干员名' in op]
+            op_names = [op['干员名'] for op in operators_data if '干员名' in op and op.get('星级', '6') not in ('1', '2')]
             if op_names:
                 chosen = random.choice(op_names)
                 questions.append({
@@ -760,69 +760,69 @@ async def get_quick_questions():
             "type": "skill",
         })
 
-    # ===== 3. 故事问题：随机故事 =====
+    # ===== 3. 故事问题：从 stories 文件夹获取 =====
     try:
-        story_file = DATA_DIR / "story_summary.md"
-        if story_file.exists():
-            with open(story_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-            story_names = extract_names_from_markdown_table(content)
+        stories_dir = DATA_DIR / "stories"
+        if stories_dir.exists():
+            story_names = []
+            for f in stories_dir.glob("*.md"):
+                with open(f, 'r', encoding='utf-8') as fh:
+                    first_line = fh.readline().strip()
+                    if first_line.startswith('# '):
+                        story_names.append(first_line[2:].strip())
             if story_names:
                 chosen = random.choice(story_names)
                 questions.append({
                     "label": f"{chosen}故事",
-                    "question": f"{chosen}故事内容",
+                    "question": f"{chosen}的故事内容",
                     "type": "story",
                 })
     except Exception:
         questions.append({
-            "label": "骑士故事",
-            "question": "骑士故事内容",
+            "label": "乌萨斯的孩子们故事",
+            "question": "乌萨斯的孩子们的故事内容",
             "type": "story",
         })
 
-    # ===== 4. 背景故事：随机干员（优先选在图中的干员） =====
+    # ===== 4. 敌人问题：从 all_enemies.json 获取 =====
     try:
-        # 从 char_summary 中获取角色名
-        char_file = DATA_DIR / "char_summary.md"
-        if char_file.exists():
-            with open(char_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-            char_names = extract_names_from_markdown_table(content)
-            if char_names:
-                chosen = random.choice(char_names)
+        enemies_file = DATA_DIR / "all_enemies.json"
+        if enemies_file.exists():
+            with open(enemies_file, 'r', encoding='utf-8') as f:
+                enemies_data = json.load(f)
+            enemy_names = [e['名称'] for e in enemies_data if '名称' in e]
+            if enemy_names:
+                chosen = random.choice(enemy_names)
                 questions.append({
-                    "label": f"{chosen}背景",
-                    "question": f"{chosen}背景故事",
-                    "type": "background",
+                    "label": f"{chosen}敌人",
+                    "question": f"{chosen}的属性和能力是什么",
+                    "type": "enemy",
                 })
     except Exception:
         questions.append({
-            "label": "银灰背景",
-            "question": "银灰背景故事",
-            "type": "background",
+            "label": "源石虫敌人",
+            "question": "源石虫的属性和能力是什么",
+            "type": "enemy",
         })
 
-    # ===== 5. 别名问题：从有别名的干员中抽取 =====
-    # 收集每个干员的所有别名
-    alias_groups = {}
-    for alias, real_name in ALIAS_MAP.items():
-        if alias == real_name:
-            continue
-        if real_name not in alias_groups:
-            alias_groups[real_name] = []
-        alias_groups[real_name].append(alias)
-
-    if alias_groups:
-        operator_name = random.choice(list(alias_groups.keys()))
-        aliases = alias_groups[operator_name]
-        questions.append({
-            "label": f"{operator_name}别名",
-            "question": f"{operator_name}别名有什么",
-            "type": "alias",
-        })
-    else:
-        # fallback
+    # ===== 5. 别名问题：从 operators 文件夹获取干员名 =====
+    try:
+        operators_dir = DATA_DIR / "operators"
+        if operators_dir.exists():
+            op_names = []
+            for f in operators_dir.glob("*.md"):
+                with open(f, 'r', encoding='utf-8') as fh:
+                    first_line = fh.readline().strip()
+                    if first_line.startswith('# '):
+                        op_names.append(first_line[2:].strip())
+            if op_names:
+                chosen = random.choice(op_names)
+                questions.append({
+                    "label": f"{chosen}别名",
+                    "question": f"{chosen}别名有什么",
+                    "type": "alias",
+                })
+    except Exception:
         questions.append({
             "label": "银灰别名",
             "question": "银灰别名有什么",

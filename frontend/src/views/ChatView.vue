@@ -444,6 +444,14 @@ async function sendMessage() {
 
   isLoading.value = true
   inputText.value = ''
+  // Reset textarea height
+  nextTick(() => {
+    const textarea = document.querySelector('.chat-input')
+    if (textarea) {
+      textarea.style.height = 'auto'
+      textarea.style.overflowY = 'hidden'
+    }
+  })
   currentAnswer.value = ''
   expandedTools.value = []
   expandedThinking.value = []
@@ -725,7 +733,7 @@ function scrollToBottom() {
 .chat-input-area { padding: var(--spacing-lg); background: var(--bg-panel); border-top: 1px solid var(--border-color); }
 .chat-form { display: flex; gap: var(--spacing-md); align-items: center; }
 .chat-input-wrapper { flex: 1; position: relative; }
-.chat-input { width: 100%; padding: var(--spacing-md); padding-right: 44px; resize: none; min-height: 50px; max-height: 150px; box-sizing: border-box; }
+.chat-input { width: 100%; padding: var(--spacing-md); padding-right: 44px; resize: none; min-height: 50px; max-height: 150px; box-sizing: border-box; overflow-y: hidden; -webkit-overflow-scrolling: auto; overscroll-behavior: contain; }
 .chat-submit { width: 44px; height: 44px; padding: 0; margin-top: -6px; background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dim) 100%); border: none; border-radius: 12px; color: var(--bg-deep); cursor: pointer; transition: all var(--transition-fast); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .chat-submit:hover { transform: scale(1.05); box-shadow: 0 0 20px var(--color-primary-glow); }
 .chat-submit:active { transform: scale(0.95); }
@@ -738,6 +746,7 @@ function scrollToBottom() {
 @media (max-width: 768px) {
   .chat-page { height: calc(100vh - 60px); }
   .chat-input-area { padding: var(--spacing-md); }
+  .chat-input { font-size: 14px; min-height: 40px; padding: 10px 12px; padding-right: 40px; }
   .chat-messages { padding: var(--spacing-md); }
   .quick-actions { gap: var(--spacing-xs); }
   .quick-action { font-size: 0.75rem; padding: var(--spacing-xs) var(--spacing-sm); }
