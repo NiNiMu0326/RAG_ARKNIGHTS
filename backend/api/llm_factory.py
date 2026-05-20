@@ -1,7 +1,7 @@
 """
 Unified LLM Client Factory.
 Creates the appropriate client based on model name.
-Supports: DeepSeek, SiliconFlow, MiniMax, MiMo
+Supports: DeepSeek, MiniMax
 """
 
 import logging
@@ -23,11 +23,6 @@ MODEL_REGISTRY = {
         "provider": "minimax",
         "model_name": "MiniMax-M2.7",
         "display_name": "MiniMax-M2.7",
-    },
-    "mimo-v2.5-pro": {
-        "provider": "mimo",
-        "model_name": "mimo-v2.5-pro",
-        "display_name": "MiMo-V2.5-Pro (小米)",
     },
 }
 
@@ -55,9 +50,11 @@ def _get_deepseek_client(model_name: str = None) -> DeepSeekClient:
     """Get or create a DeepSeek client."""
     key = f"deepseek:{model_name or 'default'}"
     if key not in _clients:
-        client = DeepSeekClient(api_key=config.DEEPSEEK_API_KEY)
-        if model_name:
-            client.model = model_name
+        client = DeepSeekClient(
+            api_key=config.DEEPSEEK_API_KEY,
+            base_url=config.DEEPSEEK_BASE_URL,
+            model=model_name
+        )
         _clients[key] = client
     return _clients[key]
 
@@ -69,23 +66,11 @@ def _get_minimax_client(model_name: str) -> DeepSeekClient:
         api_key = config.MINIMAX_API_KEY
         if not api_key:
             raise ValueError("MiniMax API key not configured. Set MINIMAX_API_KEY in .env")
-        client = DeepSeekClient(api_key=api_key)
-        client.base_url = "https://api.minimaxi.com/v1"
-        client.model = model_name
-        _clients[key] = client
-    return _clients[key]
-
-
-def _get_mimo_client(model_name: str) -> DeepSeekClient:
-    """Get or create a MiMo chat client (OpenAI-compatible, reuse DeepSeekClient)."""
-    key = f"mimo:{model_name}"
-    if key not in _clients:
-        api_key = config.MIMO_API_KEY
-        if not api_key:
-            raise ValueError("MiMo API key not configured. Set MIMO_API_KEY in .env")
-        client = DeepSeekClient(api_key=api_key)
-        client.base_url = config.MIMO_BASE_URL
-        client.model = model_name
+        client = DeepSeekClient(
+            api_key=api_key,
+            base_url="https://api.minimaxi.com/v1",
+            model=model_name
+        )
         _clients[key] = client
     return _clients[key]
 
@@ -113,7 +98,5 @@ def get_llm_client(model_id: str = None) -> DeepSeekClient:
         return _get_deepseek_client(model_name)
     elif provider == "minimax":
         return _get_minimax_client(model_name)
-    elif provider == "mimo":
-        return _get_mimo_client(model_name)
     else:
         raise ValueError(f"Unknown provider: {provider}")

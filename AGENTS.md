@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-本文件为 Claude Code (claude.ai/code) 在此代码库中工作时提供指导。
+本文件为 Codex (Codex.ai/code) 在此代码库中工作时提供指导。
 
 ## 项目概述
 
@@ -360,17 +360,17 @@ npx gitnexus analyze --embeddings
 
 To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.embeddings` field shows the count (0 means no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
 
-> Claude Code users: A PostToolUse hook handles this automatically after `git commit` and `git merge`.
+> Codex users: A PostToolUse hook handles this automatically after `git commit` and `git merge`.
 
 ## CLI
 
 | Task | Read this skill file |
 |------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+| Understand architecture / "How does X work?" | `.Codex/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `.Codex/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `.Codex/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `.Codex/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `.Codex/skills/gitnexus/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `.Codex/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
