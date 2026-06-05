@@ -13,7 +13,7 @@
 - **地址**：119.147.202.190:14602
 - **SSH**：`ssh root@119.147.202.190 -p 14602`
 - **密码**：LLll11..
-- **项目路径**：服务器上项目位于 `/root/ARKNIGHTS_AgenticRAG/`（或类似路径）
+- **项目路径**：服务器上项目位于 `/srv/projects/arknights-rag/`
 
 ## 架构
 
@@ -284,7 +284,7 @@ python backend/build_faiss_index.py
 - **地址**：119.147.202.190:14602
 - **SSH**：`ssh root@119.147.202.190 -p 14602`
 - **密码**：LLll11..
-- **项目路径**：`/root/ARKNIGHTS_AgenticRAG/`
+- **项目路径**：`/srv/projects/arknights-rag/`
 
 ### 部署命令示例
 
@@ -296,7 +296,7 @@ git push origin main
 
 # 服务器拉取更新
 ssh root@119.147.202.190 -p 14602
-cd /root/ARKNIGHTS_AgenticRAG/
+cd /srv/projects/arknights-rag/
 git pull
 ```
 

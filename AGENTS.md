@@ -9,7 +9,7 @@
 - **鍦板潃**锛?19.147.202.190:14602
 - **SSH**锛歚ssh root@119.147.202.190 -p 14602`
 - **瀵嗙爜**锛歀Lll11..
-- **椤圭洰璺緞**锛氭湇鍔″櫒涓婇」鐩綅浜?`/root/ARKNIGHTS_AgenticRAG/`锛堟垨绫讳技璺緞锛?
+- **椤圭洰璺緞**锛氭湇鍔″櫒涓婇」鐩綅浜?`/srv/projects/arknights-rag/`锛堟垨绫讳技璺緞锛?
 ## 鏋舵瀯
 
 ### Agent 涓诲惊鐜紙`backend/agent/core.py`锛?
@@ -255,7 +255,7 @@ python backend/build_faiss_index.py
 - **地址**：119.147.202.190:14602
 - **SSH**：`ssh root@119.147.202.190 -p 14602`
 - **密码**：LLll11..
-- **项目路径**：`/root/ARKNIGHTS_AgenticRAG/`
+- **项目路径**：`/srv/projects/arknights-rag/`
 
 ### 部署命令示例
 
@@ -267,7 +267,7 @@ git push origin main
 
 # 服务器拉取更新
 ssh root@119.147.202.190 -p 14602
-cd /root/ARKNIGHTS_AgenticRAG/
+cd /srv/projects/arknights-rag/
 git pull
 ```
 
