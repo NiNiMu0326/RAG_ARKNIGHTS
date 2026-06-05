@@ -1,280 +1,284 @@
-# AGENTS.md
+﻿# AGENTS.md
 
-本文件为 Codex (Codex.ai/code) 在此代码库中工作时提供指导。
+鏈枃浠朵负 Codex (Codex.ai/code) 鍦ㄦ浠ｇ爜搴撲腑宸ヤ綔鏃舵彁渚涙寚瀵笺€?
+## 椤圭洰姒傝堪
 
-## 项目概述
+鏄庢棩鏂硅垷 ARKNIGHTS Agent 闂瓟绯荤粺銆備竴涓?AI Agent锛岄€氳繃 Function Calling 鑷富鍐冲畾妫€绱㈣矾寰勶細鐭ヨ瘑搴撴绱€佺煡璇嗗浘璋辨煡璇€佺綉缁滄悳绱紝涓変釜宸ュ叿鍙苟琛岃皟鐢ㄣ€傛敮鎸?SSE 娴佸紡杈撳嚭銆佺敤鎴疯璇侊紙JWT锛夈€佷細璇濇寔涔呭寲锛圫QLite锛夈€佸 LLM 妯″瀷鍒囨崲銆?
+鏈」鐩凡绉婚櫎鏃х殑 PipelineRAG 鏋舵瀯锛屾墍鏈?RAG 鍔熻兘閫氳繃 Agent 宸ュ叿璋冪敤瀹炵幇锛屼笉瀛樺湪鐙珛鐨勬煡璇㈡敼鍐?CRAG/绛旀鐢熸垚姝ラ銆?
+## 鏈嶅姟鍣?
+- **鍦板潃**锛?19.147.202.190:14602
+- **SSH**锛歚ssh root@119.147.202.190 -p 14602`
+- **瀵嗙爜**锛歀Lll11..
+- **椤圭洰璺緞**锛氭湇鍔″櫒涓婇」鐩綅浜?`/root/ARKNIGHTS_AgenticRAG/`锛堟垨绫讳技璺緞锛?
+## 鏋舵瀯
 
-明日方舟 ARKNIGHTS Agent 问答系统。一个 AI Agent，通过 Function Calling 自主决定检索路径：知识库检索、知识图谱查询、网络搜索，三个工具可并行调用。支持 SSE 流式输出、用户认证（JWT）、会话持久化（SQLite）、多 LLM 模型切换。
-
-本项目已移除旧的 PipelineRAG 架构，所有 RAG 功能通过 Agent 工具调用实现，不存在独立的查询改写/CRAG/答案生成步骤。
-
-## 服务器
-
-- **地址**：119.147.202.190:14602
-- **SSH**：`ssh root@119.147.202.190 -p 14602`
-- **密码**：LLll11..
-- **项目路径**：服务器上项目位于 `/root/ARKNIGHTS_AgenticRAG/`（或类似路径）
-
-## 架构
-
-### Agent 主循环（`backend/agent/core.py`）
-
+### Agent 涓诲惊鐜紙`backend/agent/core.py`锛?
 ```
-用户消息 → build_messages() → LLM(FC) → tool_calls? → 并行执行 → 结果注入 → 继续循环
-                                                    ↓ 无 tool_calls
-                                              流式输出回答 → 结束
+鐢ㄦ埛娑堟伅 鈫?build_messages() 鈫?LLM(FC) 鈫?tool_calls? 鈫?骞惰鎵ц 鈫?缁撴灉娉ㄥ叆 鈫?缁х画寰幆
+                                                    鈫?鏃?tool_calls
+                                              娴佸紡杈撳嚭鍥炵瓟 鈫?缁撴潫
 ```
 
-每轮 LLM 返回工具调用时并行执行，结果加入消息历史继续下一轮，直到模型认为信息充足或达到 max_rounds=8 上限。
-
-### 三个工具（`backend/agent/tool_implementations.py`）
-
-| 工具 | 功能 | 流程 |
+姣忚疆 LLM 杩斿洖宸ュ叿璋冪敤鏃跺苟琛屾墽琛岋紝缁撴灉鍔犲叆娑堟伅鍘嗗彶缁х画涓嬩竴杞紝鐩村埌妯″瀷璁や负淇℃伅鍏呰冻鎴栬揪鍒?max_rounds=8 涓婇檺銆?
+### 涓変釜宸ュ叿锛坄backend/agent/tool_implementations.py`锛?
+| 宸ュ叿 | 鍔熻兘 | 娴佺▼ |
 |------|------|------|
-| `arknights_rag_search` | 知识库检索 | FAISS + BM25 → RRF 融合 → Cross-Encoder 重排 → Parent Document 扩展 |
-| `arknights_graphrag_search` | 知识图谱查询 | 单实体邻居查询 / 双实体最短路径查找 |
-| `web_search` | 网络搜索 | Tavily API + DuckDuckGo 兜底 |
+| `arknights_rag_search` | 鐭ヨ瘑搴撴绱?| FAISS + BM25 鈫?RRF 铻嶅悎 鈫?Cross-Encoder 閲嶆帓 鈫?Parent Document 鎵╁睍 |
+| `arknights_graphrag_search` | 鐭ヨ瘑鍥捐氨鏌ヨ | 鍗曞疄浣撻偦灞呮煡璇?/ 鍙屽疄浣撴渶鐭矾寰勬煡鎵?|
+| `web_search` | 缃戠粶鎼滅储 | Tavily API + DuckDuckGo 鍏滃簳 |
 
-工具通过 `ToolRegistry` 注册，Schema 定义在 `tools.py`，实现在 `tool_implementations.py`。
+宸ュ叿閫氳繃 `ToolRegistry` 娉ㄥ唽锛孲chema 瀹氫箟鍦?`tools.py`锛屽疄鐜板湪 `tool_implementations.py`銆?
+### 瀹夊叏鏈哄埗
 
-### 安全机制
+- max_rounds=8 纭檺鍒?- `detect_loop()` 寰幆妫€娴嬶紙鏈€杩?3 杞浉鍚?tool_calls 鍗崇粓姝級
+- LLM 鏈€澶ц緭鍑?token 闄愬埗
 
-- max_rounds=8 硬限制
-- `detect_loop()` 循环检测（最近 3 轮相同 tool_calls 即终止）
-- LLM 最大输出 token 限制
-
-### LLM 多模型（`backend/api/llm_factory.py`）
-
-所有 Provider 通过 OpenAI 兼容 API 统一，底层复用 `DeepSeekClient`（切换 base_url/api_key/model）。
-
-| model_id | Provider | 显示名称 |
+### LLM 澶氭ā鍨嬶紙`backend/api/llm_factory.py`锛?
+鎵€鏈?Provider 閫氳繃 OpenAI 鍏煎 API 缁熶竴锛屽簳灞傚鐢?`DeepSeekClient`锛堝垏鎹?base_url/api_key/model锛夈€?
+| model_id | Provider | 鏄剧ず鍚嶇О |
 |----------|----------|----------|
-| `deepseek-chat` | DeepSeek | DeepSeek-V4-Flash (DeepSeek官方) |
+| `deepseek-chat` | DeepSeek | DeepSeek-V4-Flash (DeepSeek瀹樻柟) |
 | `minimax-m2.7` | MiniMax | MiniMax-M2.7 |
 
-默认模型：`minimax-m2.7`
+榛樿妯″瀷锛歚minimax-m2.7`
 
-### 会话管理（`backend/agent/sessions.py`）
+### 浼氳瘽绠＄悊锛坄backend/agent/sessions.py`锛?
+- TTL 3600 绉掞紝鏈€澶?1000 浼氳瘽锛孡RU 椹遍€?- 绾跨▼瀹夊叏锛坅syncio.Lock锛?- 鍓嶇 Pinia sessions store 鍚屾绠＄悊锛屾敮鎸?localStorage + 鏈嶅姟绔弻閲嶆寔涔呭寲
 
-- TTL 3600 秒，最大 1000 会话，LRU 驱逐
-- 线程安全（asyncio.Lock）
-- 前端 Pinia sessions store 同步管理，支持 localStorage + 服务端双重持久化
+## 鏂囦欢娓呭崟
 
-## 文件清单
-
-### Agent 核心（`backend/agent/`）
-
-| 文件 | 职责 |
+### Agent 鏍稿績锛坄backend/agent/`锛?
+| 鏂囦欢 | 鑱岃矗 |
 |------|------|
-| `core.py` | Agent 主循环：SSE 流式、并行 Function Calling、循环检测、消息构建 |
-| `tools.py` | 三个工具的 Schema 定义 + ToolRegistry 注册表 |
-| `tool_implementations.py` | 三个工具的实际实现 + BM25/GraphBuilder 懒加载单例 |
-| `sessions.py` | 会话管理：创建、查询、TTL 过期、LRU 驱逐、线程安全 |
-| `prompts.py` | 系统提示词模板 + build_messages() 消息上下文构建 |
+| `core.py` | Agent 涓诲惊鐜細SSE 娴佸紡銆佸苟琛?Function Calling銆佸惊鐜娴嬨€佹秷鎭瀯寤?|
+| `tools.py` | 涓変釜宸ュ叿鐨?Schema 瀹氫箟 + ToolRegistry 娉ㄥ唽琛?|
+| `tool_implementations.py` | 涓変釜宸ュ叿鐨勫疄闄呭疄鐜?+ BM25/GraphBuilder 鎳掑姞杞藉崟渚?|
+| `sessions.py` | 浼氳瘽绠＄悊锛氬垱寤恒€佹煡璇€乀TL 杩囨湡銆丩RU 椹遍€愩€佺嚎绋嬪畨鍏?|
+| `prompts.py` | 绯荤粺鎻愮ず璇嶆ā鏉?+ build_messages() 娑堟伅涓婁笅鏂囨瀯寤?|
 
-### API 客户端（`backend/api/`）
-
-| 文件 | 职责 |
+### API 瀹㈡埛绔紙`backend/api/`锛?
+| 鏂囦欢 | 鑱岃矗 |
 |------|------|
-| `llm_factory.py` | 多 Provider LLM 工厂，模型列表、创建客户端 |
-| `deepseek.py` | OpenAI 兼容客户端：Chat Completion + Function Calling + SSE 流式 |
-| `siliconflow.py` | SiliconFlow API：嵌入（bge-m3）、重排（bge-reranker-v2-m3）、LLM |
-| `web_search.py` | 网络搜索：Tavily API 优先，DuckDuckGo HTML 解析兜底 |
+| `llm_factory.py` | 澶?Provider LLM 宸ュ巶锛屾ā鍨嬪垪琛ㄣ€佸垱寤哄鎴风 |
+| `deepseek.py` | OpenAI 鍏煎瀹㈡埛绔細Chat Completion + Function Calling + SSE 娴佸紡 |
+| `siliconflow.py` | SiliconFlow API锛氬祵鍏ワ紙bge-m3锛夈€侀噸鎺掞紙bge-reranker-v2-m3锛夈€丩LM |
+| `web_search.py` | 缃戠粶鎼滅储锛歍avily API 浼樺厛锛孌uckDuckGo HTML 瑙ｆ瀽鍏滃簳 |
 
-### RAG 基础设施（`backend/rag/`）
-
-| 文件 | 职责 |
+### RAG 鍩虹璁炬柦锛坄backend/rag/`锛?
+| 鏂囦欢 | 鑱岃矗 |
 |------|------|
-| `retrievers.py` | 多通道检索：FAISS 向量 + BM25 关键词 → RRF 融合，结果缓存 5h |
-| `parent_document.py` | Parent Document 扩展：检索到的 chunk → 对应父文档，LRU 缓存 max 100 |
-| `alias_map.py` | 干员别名映射字典，供 `/quick-questions` API 使用 |
-| `graphrag/builder.py` | 知识图谱构建：从 entity_relations.json 构建 NetworkX DiGraph |
-| `graphrag/extractor.py` | 实体关系提取 |
-| `graphrag/query.py` | 图谱查询单例（get_graph_builder）：邻居查询 + 最短路径查找 |
+| `retrievers.py` | 澶氶€氶亾妫€绱細FAISS 鍚戦噺 + BM25 鍏抽敭璇?鈫?RRF 铻嶅悎锛岀粨鏋滅紦瀛?5h |
+| `parent_document.py` | Parent Document 鎵╁睍锛氭绱㈠埌鐨?chunk 鈫?瀵瑰簲鐖舵枃妗ｏ紝LRU 缂撳瓨 max 100 |
+| `alias_map.py` | 骞插憳鍒悕鏄犲皠瀛楀吀锛屼緵 `/quick-questions` API 浣跨敤 |
+| `graphrag/builder.py` | 鐭ヨ瘑鍥捐氨鏋勫缓锛氫粠 entity_relations.json 鏋勫缓 NetworkX DiGraph |
+| `graphrag/extractor.py` | 瀹炰綋鍏崇郴鎻愬彇 |
+| `graphrag/query.py` | 鍥捐氨鏌ヨ鍗曚緥锛坓et_graph_builder锛夛細閭诲眳鏌ヨ + 鏈€鐭矾寰勬煡鎵?|
 
-### LangChain 封装（`backend/lc/`）
-
-| 文件 | 职责 |
+### LangChain 灏佽锛坄backend/lc/`锛?
+| 鏂囦欢 | 鑱岃矗 |
 |------|------|
-| `embeddings.py` | LangChain Embeddings 封装，被 retrievers.py 和 tool_implementations.py 使用 |
-| `reranker.py` | LangChain Cross-Encoder Reranker 封装，被 tool_implementations.py 使用 |
+| `embeddings.py` | LangChain Embeddings 灏佽锛岃 retrievers.py 鍜?tool_implementations.py 浣跨敤 |
+| `reranker.py` | LangChain Cross-Encoder Reranker 灏佽锛岃 tool_implementations.py 浣跨敤 |
 
-### 基础设施（`backend/`）
-
-| 文件 | 职责 |
+### 鍩虹璁炬柦锛坄backend/`锛?
+| 鏂囦欢 | 鑱岃矗 |
 |------|------|
-| `main.py` | FastAPI 主应用：所有路由、SSE 端点、CORS、静态文件挂载 |
-| `config.py` | 全局配置：API Keys、模型参数、路径常量 |
-| `db.py` | SQLite 数据库（aiosqlite）：用户表、会话表初始化 |
-| `auth.py` | JWT 认证：注册、登录、token 签发/验证、密码哈希 |
-| `storage/faiss_client.py` | FAISS 向量索引封装：加载、搜索、持久化到 `faiss_index/` |
+| `main.py` | FastAPI 涓诲簲鐢細鎵€鏈夎矾鐢便€丼SE 绔偣銆丆ORS銆侀潤鎬佹枃浠舵寕杞?|
+| `config.py` | 鍏ㄥ眬閰嶇疆锛欰PI Keys銆佹ā鍨嬪弬鏁般€佽矾寰勫父閲?|
+| `db.py` | SQLite 鏁版嵁搴擄紙aiosqlite锛夛細鐢ㄦ埛琛ㄣ€佷細璇濊〃鍒濆鍖?|
+| `auth.py` | JWT 璁よ瘉锛氭敞鍐屻€佺櫥褰曘€乼oken 绛惧彂/楠岃瘉銆佸瘑鐮佸搱甯?|
+| `storage/faiss_client.py` | FAISS 鍚戦噺绱㈠紩灏佽锛氬姞杞姐€佹悳绱€佹寔涔呭寲鍒?`faiss_index/` |
 
-### 数据脚本（`backend/data/`）
-
-| 文件 | 职责 |
+### 鏁版嵁鑴氭湰锛坄backend/data/`锛?
+| 鏂囦欢 | 鑱岃矗 |
 |------|------|
-| `chunker.py` | 文本切块：将原始数据切成检索用 chunk |
-| `bm25_index.py` | BM25 关键词索引构建 |
+| `chunker.py` | 鏂囨湰鍒囧潡锛氬皢鍘熷鏁版嵁鍒囨垚妫€绱㈢敤 chunk |
+| `bm25_index.py` | BM25 鍏抽敭璇嶇储寮曟瀯寤?|
 
-### 前端（`frontend/src/`）
-
-**页面（views/）：**
-| 文件 | 路由 | 功能 |
+### 鍓嶇锛坄frontend/src/`锛?
+**椤甸潰锛坴iews/锛夛細**
+| 鏂囦欢 | 璺敱 | 鍔熻兘 |
 |------|------|------|
-| `ChatView.vue` | `/chat` | 问答界面：SSE 流式对话、工具调用卡片、思考过程展开、快捷问题按钮、消息队列 |
-| `AdminView.vue` | `/admin` | 管理面板：Chunk 浏览器（按集合浏览/搜索切块）、数据仪表板（统计图表） |
-| `GraphView.vue` | `/graph` | 交互式知识图谱：Cytoscape.js 力导向布局、节点搜索、邻居展开、关系筛选 |
+| `ChatView.vue` | `/chat` | 闂瓟鐣岄潰锛歋SE 娴佸紡瀵硅瘽銆佸伐鍏疯皟鐢ㄥ崱鐗囥€佹€濊€冭繃绋嬪睍寮€銆佸揩鎹烽棶棰樻寜閽€佹秷鎭槦鍒?|
+| `AdminView.vue` | `/admin` | 绠＄悊闈㈡澘锛欳hunk 娴忚鍣紙鎸夐泦鍚堟祻瑙?鎼滅储鍒囧潡锛夈€佹暟鎹华琛ㄦ澘锛堢粺璁″浘琛級 |
+| `GraphView.vue` | `/graph` | 浜や簰寮忕煡璇嗗浘璋憋細Cytoscape.js 鍔涘鍚戝竷灞€銆佽妭鐐规悳绱€侀偦灞呭睍寮€銆佸叧绯荤瓫閫?|
 
-**组件（components/）：**
-| 文件 | 功能 |
+**缁勪欢锛坈omponents/锛夛細**
+| 鏂囦欢 | 鍔熻兘 |
 |------|------|
-| `AppSidebar.vue` | 侧边栏：导航 + 会话列表管理 + 图谱控制面板（搜索、选择、关系筛选） |
-| `AppHeader.vue` | 顶部栏：移动端菜单按钮 + 页面标题 + 设置入口 |
-| `AuthModal.vue` | 登录/注册弹窗 |
-| `SettingsModal.vue` | 设置弹窗：账户信息/修改密码、主题切换、模型选择、关于 |
-| `Toast.vue` | 全局通知提示 |
+| `AppSidebar.vue` | 渚ц竟鏍忥細瀵艰埅 + 浼氳瘽鍒楄〃绠＄悊 + 鍥捐氨鎺у埗闈㈡澘锛堟悳绱€侀€夋嫨銆佸叧绯荤瓫閫夛級 |
+| `AppHeader.vue` | 椤堕儴鏍忥細绉诲姩绔彍鍗曟寜閽?+ 椤甸潰鏍囬 + 璁剧疆鍏ュ彛 |
+| `AuthModal.vue` | 鐧诲綍/娉ㄥ唽寮圭獥 |
+| `SettingsModal.vue` | 璁剧疆寮圭獥锛氳处鎴蜂俊鎭?淇敼瀵嗙爜銆佷富棰樺垏鎹€佹ā鍨嬮€夋嫨銆佸叧浜?|
+| `Toast.vue` | 鍏ㄥ眬閫氱煡鎻愮ず |
 
-**状态管理（stores/）：**
-| 文件 | 职责 |
+**鐘舵€佺鐞嗭紙stores/锛夛細**
+| 鏂囦欢 | 鑱岃矗 |
 |------|------|
-| `sessions.js` | 会话 CRUD、消息管理、localStorage/服务端同步 |
-| `auth.js` | JWT token 管理、用户状态、登录/注册/登出 |
-| `settings.js` | 主题切换、模型选择、设置持久化 |
-| `quickQuestions.js` | 快捷问题缓存 |
-| `toast.js` | 通知消息 |
+| `sessions.js` | 浼氳瘽 CRUD銆佹秷鎭鐞嗐€乴ocalStorage/鏈嶅姟绔悓姝?|
+| `auth.js` | JWT token 绠＄悊銆佺敤鎴风姸鎬併€佺櫥褰?娉ㄥ唽/鐧诲嚭 |
+| `settings.js` | 涓婚鍒囨崲銆佹ā鍨嬮€夋嫨銆佽缃寔涔呭寲 |
+| `quickQuestions.js` | 蹇嵎闂缂撳瓨 |
+| `toast.js` | 閫氱煡娑堟伅 |
 
-**其他：**
-| 文件 | 职责 |
+**鍏朵粬锛?*
+| 鏂囦欢 | 鑱岃矗 |
 |------|------|
-| `api.js` | API 客户端：所有后端接口封装，含 `agentChat()` SSE 流式调用 |
-| `composables/useGraphController.js` | 图谱控制器单例，GraphView 和 AppSidebar 共享 |
-| `assets/styles.css` | 全局样式（CSS 变量、双主题、组件样式） |
-| `assets/graphrag.css` | 知识图谱专用样式 |
+| `api.js` | API 瀹㈡埛绔細鎵€鏈夊悗绔帴鍙ｅ皝瑁咃紝鍚?`agentChat()` SSE 娴佸紡璋冪敤 |
+| `composables/useGraphController.js` | 鍥捐氨鎺у埗鍣ㄥ崟渚嬶紝GraphView 鍜?AppSidebar 鍏变韩 |
+| `assets/styles.css` | 鍏ㄥ眬鏍峰紡锛圕SS 鍙橀噺銆佸弻涓婚銆佺粍浠舵牱寮忥級 |
+| `assets/graphrag.css` | 鐭ヨ瘑鍥捐氨涓撶敤鏍峰紡 |
 
-### 数据目录
+### 鏁版嵁鐩綍
 
-| 路径 | 内容 |
+| 璺緞 | 鍐呭 |
 |------|------|
-| `data/` | 原始数据集（JSON/Markdown）：干员数据、故事、知识等 |
-| `chunks/` | 文本切块输出，按 collection 分目录 |
-| `chunks/graphrag/entity_relations.json` | 知识图谱实体关系数据 |
-| `faiss_index/` | FAISS 向量索引持久化文件 |
+| `data/` | 鍘熷鏁版嵁闆嗭紙JSON/Markdown锛夛細骞插憳鏁版嵁銆佹晠浜嬨€佺煡璇嗙瓑 |
+| `chunks/` | 鏂囨湰鍒囧潡杈撳嚭锛屾寜 collection 鍒嗙洰褰?|
+| `chunks/graphrag/entity_relations.json` | 鐭ヨ瘑鍥捐氨瀹炰綋鍏崇郴鏁版嵁 |
+| `faiss_index/` | FAISS 鍚戦噺绱㈠紩鎸佷箙鍖栨枃浠?|
 
-## API 端点
+## API 绔偣
 
 ### Agent
-| 方法 | 路径 | 描述 |
+| 鏂规硶 | 璺緞 | 鎻忚堪 |
 |------|------|------|
-| POST | `/agent/chat` | Agent SSE 流式对话（核心端点） |
-| POST | `/agent/session` | 创建会话，返回 session_id |
-| GET | `/agent/session/{id}/messages` | 获取会话消息历史 |
-| DELETE | `/agent/session/{id}` | 删除会话 |
-| GET | `/agent/models` | 可用 LLM 模型列表 |
-| GET | `/agent/stats` | 会话统计 |
+| POST | `/agent/chat` | Agent SSE 娴佸紡瀵硅瘽锛堟牳蹇冪鐐癸級 |
+| POST | `/agent/session` | 鍒涘缓浼氳瘽锛岃繑鍥?session_id |
+| GET | `/agent/session/{id}/messages` | 鑾峰彇浼氳瘽娑堟伅鍘嗗彶 |
+| DELETE | `/agent/session/{id}` | 鍒犻櫎浼氳瘽 |
+| GET | `/agent/models` | 鍙敤 LLM 妯″瀷鍒楄〃 |
+| GET | `/agent/stats` | 浼氳瘽缁熻 |
 
-### 认证
-| 方法 | 路径 | 描述 |
+### 璁よ瘉
+| 鏂规硶 | 璺緞 | 鎻忚堪 |
 |------|------|------|
-| POST | `/auth/register` | 注册（username, account, password） |
-| POST | `/auth/login` | 登录（account, password），返回 JWT token |
-| GET | `/auth/me` | 当前用户信息 |
-| POST | `/auth/change-password` | 修改密码 |
+| POST | `/auth/register` | 娉ㄥ唽锛坲sername, account, password锛?|
+| POST | `/auth/login` | 鐧诲綍锛坅ccount, password锛夛紝杩斿洖 JWT token |
+| GET | `/auth/me` | 褰撳墠鐢ㄦ埛淇℃伅 |
+| POST | `/auth/change-password` | 淇敼瀵嗙爜 |
 
-### 会话管理
-| 方法 | 路径 | 描述 |
+### 浼氳瘽绠＄悊
+| 鏂规硶 | 璺緞 | 鎻忚堪 |
 |------|------|------|
-| GET | `/conversations` | 用户会话列表 |
-| GET | `/conversations/{id}/messages` | 会话消息 |
-| POST | `/conversations/sync` | 同步本地会话到服务端 |
-| DELETE | `/conversations/{id}` | 删除会话 |
-| PUT | `/conversations/{id}/rename` | 重命名会话 |
+| GET | `/conversations` | 鐢ㄦ埛浼氳瘽鍒楄〃 |
+| GET | `/conversations/{id}/messages` | 浼氳瘽娑堟伅 |
+| POST | `/conversations/sync` | 鍚屾鏈湴浼氳瘽鍒版湇鍔＄ |
+| DELETE | `/conversations/{id}` | 鍒犻櫎浼氳瘽 |
+| PUT | `/conversations/{id}/rename` | 閲嶅懡鍚嶄細璇?|
 
-### 数据
-| 方法 | 路径 | 描述 |
+### 鏁版嵁
+| 鏂规硶 | 璺緞 | 鎻忚堪 |
 |------|------|------|
-| GET | `/health` | 健康检查 |
-| GET | `/status` | 配置状态（模型、API 可用性） |
-| GET | `/stats` | 数据统计（干员数、故事数、知识数、图谱节点/边数） |
-| GET | `/chunks/{collection}` | 指定集合的切块列表 |
-| GET | `/chunks/{collection}/{id}` | 单个切块详情 |
-| GET | `/knowledge-graph` | 知识图谱完整数据（entities + relations） |
-| GET | `/quick-questions` | 快捷问题列表 |
-| GET | `/operators` | 干员列表 |
-| GET | `/characters` | 角色列表 |
-| GET | `/stories` | 故事列表 |
+| GET | `/health` | 鍋ュ悍妫€鏌?|
+| GET | `/status` | 閰嶇疆鐘舵€侊紙妯″瀷銆丄PI 鍙敤鎬э級 |
+| GET | `/stats` | 鏁版嵁缁熻锛堝共鍛樻暟銆佹晠浜嬫暟銆佺煡璇嗘暟銆佸浘璋辫妭鐐?杈规暟锛?|
+| GET | `/chunks/{collection}` | 鎸囧畾闆嗗悎鐨勫垏鍧楀垪琛?|
+| GET | `/chunks/{collection}/{id}` | 鍗曚釜鍒囧潡璇︽儏 |
+| GET | `/knowledge-graph` | 鐭ヨ瘑鍥捐氨瀹屾暣鏁版嵁锛坋ntities + relations锛?|
+| GET | `/quick-questions` | 蹇嵎闂鍒楄〃 |
+| GET | `/operators` | 骞插憳鍒楄〃 |
+| GET | `/characters` | 瑙掕壊鍒楄〃 |
+| GET | `/stories` | 鏁呬簨鍒楄〃 |
 
-完整路由定义见 `backend/main.py`。
-
-## 环境变量（`backend/.env`）
-
-| 变量 | 必须 | 说明 |
+瀹屾暣璺敱瀹氫箟瑙?`backend/main.py`銆?
+## 鐜鍙橀噺锛坄backend/.env`锛?
+| 鍙橀噺 | 蹇呴』 | 璇存槑 |
 |------|------|------|
-| `SILICONFLOW_API_KEY` | 是 | 嵌入（bge-m3）+ 重排（bge-reranker-v2-m3）+ 默认 LLM |
-| `JWT_SECRET` | 是 | JWT 签名密钥，不设置则服务拒绝启动 |
-| `DEEPSEEK_API_KEY_2` | 否 | DeepSeek 官方模型 API Key |
-| `TAVILY_API_KEY` | 否 | Tavily 网络搜索，不填则 DuckDuckGo 兜底 |
-| `MINIMAX_API_KEY` | 否 | MiniMax M2.7 模型 |
-| `PORT` | 否 | 后端端口，默认 8100 |
+| `SILICONFLOW_API_KEY` | 鏄?| 宓屽叆锛坆ge-m3锛? 閲嶆帓锛坆ge-reranker-v2-m3锛? 榛樿 LLM |
+| `JWT_SECRET` | 鏄?| JWT 绛惧悕瀵嗛挜锛屼笉璁剧疆鍒欐湇鍔℃嫆缁濆惎鍔?|
+| `DEEPSEEK_API_KEY_2` | 鍚?| DeepSeek 瀹樻柟妯″瀷 API Key |
+| `TAVILY_API_KEY` | 鍚?| Tavily 缃戠粶鎼滅储锛屼笉濉垯 DuckDuckGo 鍏滃簳 |
+| `MINIMAX_API_KEY` | 鍚?| MiniMax M2.7 妯″瀷 |
+| `PORT` | 鍚?| 鍚庣绔彛锛岄粯璁?8100 |
 
-## 开发注意事项
+## 寮€鍙戞敞鎰忎簨椤?
+- **绔彛**锛氬悗绔?8100锛屽墠绔紑鍙戞湇鍔″櫒 5300锛圴ite 浠ｇ悊杞彂 API 鍒?8100锛?- Agent 浣跨敤 DeepSeek Function Calling锛?*涓嶈浼?`parallel_tool_calls` 鍙傛暟**锛堜細浣垮叾鏇翠繚瀹堬級
+- GraphRAG 浣跨敤 `nx.DiGraph`锛堟湁鍚戝浘锛夛紝浣嗚矾寰勬煡鎵炬椂杞负鏃犲悜瑙嗗浘
+- BM25 绱㈠紩鍜?GraphBuilder 閲囩敤鎳掑姞杞藉崟渚嬫ā寮忥紙绾跨▼瀹夊叏锛?- FAISS 鍚戦噺鏁版嵁鎸佷箙鍖栧埌 `faiss_index/` 鐩綍
+- GraphRAG 瀹炰綋鍏崇郴鏁版嵁鍦?`chunks/graphrag/entity_relations.json`
+- 鍓嶇 Vite 浠ｇ悊閰嶇疆灏嗘墍鏈?`/agent`銆乣/auth`銆乣/conversations` 绛夎矾寰勮浆鍙戝埌鍚庣
 
-- **端口**：后端 8100，前端开发服务器 5300（Vite 代理转发 API 到 8100）
-- Agent 使用 DeepSeek Function Calling，**不要传 `parallel_tool_calls` 参数**（会使其更保守）
-- GraphRAG 使用 `nx.DiGraph`（有向图），但路径查找时转为无向视图
-- BM25 索引和 GraphBuilder 采用懒加载单例模式（线程安全）
-- FAISS 向量数据持久化到 `faiss_index/` 目录
-- GraphRAG 实体关系数据在 `chunks/graphrag/entity_relations.json`
-- 前端 Vite 代理配置将所有 `/agent`、`/auth`、`/conversations` 等路径转发到后端
+### SSE 浜嬩欢绫诲瀷
 
-### SSE 事件类型
-
-Agent 流式对话使用以下 SSE 事件，按时间顺序：
-
-| 事件 | 含义 |
+Agent 娴佸紡瀵硅瘽浣跨敤浠ヤ笅 SSE 浜嬩欢锛屾寜鏃堕棿椤哄簭锛?
+| 浜嬩欢 | 鍚箟 |
 |------|------|
-| `thinking_start` | 开始新一轮思考 |
-| `thinking_delta` | 思考过程增量文本 |
-| `tool_calls_start` | 模型决定调用工具 |
-| `tool_executing` | 正在执行某个工具（含工具名和参数） |
-| `tool_call_result` | 工具执行完成（含返回结果） |
-| `answer_delta` | 最终回答流式增量 |
-| `answer_done` | 回答完成（含总轮数、耗时） |
-| `error` | 出错 |
+| `thinking_start` | 寮€濮嬫柊涓€杞€濊€?|
+| `thinking_delta` | 鎬濊€冭繃绋嬪閲忔枃鏈?|
+| `tool_calls_start` | 妯″瀷鍐冲畾璋冪敤宸ュ叿 |
+| `tool_executing` | 姝ｅ湪鎵ц鏌愪釜宸ュ叿锛堝惈宸ュ叿鍚嶅拰鍙傛暟锛?|
+| `tool_call_result` | 宸ュ叿鎵ц瀹屾垚锛堝惈杩斿洖缁撴灉锛?|
+| `answer_delta` | 鏈€缁堝洖绛旀祦寮忓閲?|
+| `answer_done` | 鍥炵瓟瀹屾垚锛堝惈鎬昏疆鏁般€佽€楁椂锛?|
+| `error` | 鍑洪敊 |
 
-### 技术栈
+### 鎶€鏈爤
 
-| 组件 | 技术 |
+| 缁勪欢 | 鎶€鏈?|
 |------|------|
-| 后端框架 | FastAPI + Uvicorn |
+| 鍚庣妗嗘灦 | FastAPI + Uvicorn |
 | Agent LLM | DeepSeek-V4-Flash / MiniMax-M2.7 |
-| 向量数据库 | FAISS（内存索引 + 磁盘持久化） |
-| 嵌入模型 | BAAI/bge-m3（SiliconFlow API） |
-| 重排模型 | BAAI/bge-reranker-v2-m3（SiliconFlow API） |
-| 网络搜索 | Tavily API + DuckDuckGo |
-| 知识图谱 | NetworkX DiGraph |
-| 数据库 | SQLite（aiosqlite 异步） |
-| 前端框架 | Vue 3（Composition API + script setup） |
-| 状态管理 | Pinia |
-| 构建工具 | Vite 5 |
-| 图谱可视化 | Cytoscape.js |
+| 鍚戦噺鏁版嵁搴?| FAISS锛堝唴瀛樼储寮?+ 纾佺洏鎸佷箙鍖栵級 |
+| 宓屽叆妯″瀷 | BAAI/bge-m3锛圫iliconFlow API锛?|
+| 閲嶆帓妯″瀷 | BAAI/bge-reranker-v2-m3锛圫iliconFlow API锛?|
+| 缃戠粶鎼滅储 | Tavily API + DuckDuckGo |
+| 鐭ヨ瘑鍥捐氨 | NetworkX DiGraph |
+| 鏁版嵁搴?| SQLite锛坅iosqlite 寮傛锛?|
+| 鍓嶇妗嗘灦 | Vue 3锛圕omposition API + script setup锛?|
+| 鐘舵€佺鐞?| Pinia |
+| 鏋勫缓宸ュ叿 | Vite 5 |
+| 鍥捐氨鍙鍖?| Cytoscape.js |
 
-### 启动命令
+### 鍚姩鍛戒护
 
 ```bash
-# 后端
+# 鍚庣
 cd backend && uvicorn main:app --host 0.0.0.0 --port 8100
 
-# 前端开发
-cd frontend && npm run dev
+# 鍓嶇寮€鍙?cd frontend && npm run dev
 
-# 构建索引（首次使用）
+# 鏋勫缓绱㈠紩锛堥娆′娇鐢級
 python backend/data/chunker.py
 python backend/data/bm25_index.py
 python backend/build_faiss_index.py
 ```
+## 部署工作流
+
+本项目采用 **本地开发 → Git 推送 → 服务器拉取** 的工作流：
+
+1. **本地开发**：在本地 `D:\Agent\ARKNIGHTSAgent` 修改代码
+2. **Git 提交推送**：使用 `git add` + `git commit` + `git push` 推送到远程仓库
+3. **服务器部署**：SSH 登录服务器执行 `git pull` 拉取最新代码
+
+### 服务器信息
+- **地址**：119.147.202.190:14602
+- **SSH**：`ssh root@119.147.202.190 -p 14602`
+- **密码**：LLll11..
+- **项目路径**：`/root/ARKNIGHTS_AgenticRAG/`
+
+### 部署命令示例
+
+```bash
+# 本地提交并推送
+git add -A
+git commit -m "[feat] 描述改动内容"
+git push origin main
+
+# 服务器拉取更新
+ssh root@119.147.202.190 -p 14602
+cd /root/ARKNIGHTS_AgenticRAG/
+git pull
+```
+
+### 注意事项
+- 每次重要改动后必须 commit，commit message 使用中文描述
+- 推送到仓库后提醒用户到服务器执行 `git pull`
+- 服务器上可能需要重启服务才能生效（如 uvicorn）
+
 
 <!-- gitnexus:start -->
-# GitNexus — Code Intelligence
+# GitNexus 鈥?Code Intelligence
 
 This project is indexed by GitNexus as **RAG_ARKNIGHTS_LangChain** (1972 symbols, 3495 relationships, 56 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
@@ -286,18 +290,18 @@ This project is indexed by GitNexus as **RAG_ARKNIGHTS_LangChain** (1972 symbols
 - **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
 - **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
 - When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
+- When you need full context on a specific symbol 鈥?callers, callees, which execution flows it participates in 鈥?use `gitnexus_context({name: "symbolName"})`.
 
 ## When Debugging
 
-1. `gitnexus_query({query: "<error or symptom>"})` — find execution flows related to the issue
-2. `gitnexus_context({name: "<suspect function>"})` — see all callers, callees, and process participation
-3. `READ gitnexus://repo/RAG_ARKNIGHTS_LangChain/process/{processName}` — trace the full execution flow step by step
-4. For regressions: `gitnexus_detect_changes({scope: "compare", base_ref: "main"})` — see what your branch changed
+1. `gitnexus_query({query: "<error or symptom>"})` 鈥?find execution flows related to the issue
+2. `gitnexus_context({name: "<suspect function>"})` 鈥?see all callers, callees, and process participation
+3. `READ gitnexus://repo/RAG_ARKNIGHTS_LangChain/process/{processName}` 鈥?trace the full execution flow step by step
+4. For regressions: `gitnexus_detect_changes({scope: "compare", base_ref: "main"})` 鈥?see what your branch changed
 
 ## When Refactoring
 
-- **Renaming**: MUST use `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` first. Review the preview — graph edits are safe, text_search edits need manual review. Then run with `dry_run: false`.
+- **Renaming**: MUST use `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` first. Review the preview 鈥?graph edits are safe, text_search edits need manual review. Then run with `dry_run: false`.
 - **Extracting/Splitting**: MUST run `gitnexus_context({name: "target"})` to see all incoming/outgoing refs, then `gitnexus_impact({target: "target", direction: "upstream"})` to find all external callers before moving code.
 - After any refactor: run `gitnexus_detect_changes({scope: "all"})` to verify only expected files changed.
 
@@ -305,7 +309,7 @@ This project is indexed by GitNexus as **RAG_ARKNIGHTS_LangChain** (1972 symbols
 
 - NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
 - NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
+- NEVER rename symbols with find-and-replace 鈥?use `gitnexus_rename` which understands the call graph.
 - NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
 
 ## Tools Quick Reference
@@ -323,9 +327,9 @@ This project is indexed by GitNexus as **RAG_ARKNIGHTS_LangChain** (1972 symbols
 
 | Depth | Meaning | Action |
 |-------|---------|--------|
-| d=1 | WILL BREAK — direct callers/importers | MUST update these |
-| d=2 | LIKELY AFFECTED — indirect deps | Should test |
-| d=3 | MAY NEED TESTING — transitive | Test if critical path |
+| d=1 | WILL BREAK 鈥?direct callers/importers | MUST update these |
+| d=2 | LIKELY AFFECTED 鈥?indirect deps | Should test |
+| d=3 | MAY NEED TESTING 鈥?transitive | Test if critical path |
 
 ## Resources
 
@@ -358,7 +362,7 @@ If the index previously included embeddings, preserve them by adding `--embeddin
 npx gitnexus analyze --embeddings
 ```
 
-To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.embeddings` field shows the count (0 means no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
+To check whether embeddings exist, inspect `.gitnexus/meta.json` 鈥?the `stats.embeddings` field shows the count (0 means no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
 
 > Codex users: A PostToolUse hook handles this automatically after `git commit` and `git merge`.
 
@@ -374,3 +378,4 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 | Index, status, clean, wiki CLI commands | `.Codex/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
