@@ -273,8 +273,8 @@ git pull
 
 ### 注意事项
 - 每次重要改动后必须 commit，commit message 使用中文描述
-- 推送到仓库后提醒用户到服务器执行 `git pull`
-- 服务器上可能需要重启服务才能生效（如 uvicorn）
+- 推送到仓库后提醒用户到服务器执行 `git pull`，**拉取代码后必须重启 uvicorn 服务才能生效**
+- 重启命令：`ssh -p 14602 root@119.147.202.190 'pkill -f uvicorn; cd /srv/projects/arknights-rag && nohup python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8889 > /tmp/uvicorn.log 2>&1 &'`
 
 
 <!-- gitnexus:start -->
@@ -379,3 +379,7 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` 鈥?the `stats.
 
 <!-- gitnexus:end -->
 
+
+## 文件同步
+
+**更新 AGENTS.md 时必须同步更新 CLAUDE.md，反之亦然。** 两个文件应保持内容一致（除标识 Codex/Claude Code 的首行说明和 GitNexus 相关部分）。
