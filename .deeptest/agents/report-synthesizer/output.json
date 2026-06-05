@@ -1,0 +1,131 @@
+{
+  "status": "SUCCESS",
+  "subagent": "report-synthesizer",
+  "findings": [
+    {
+      "severity": "P0",
+      "title": "backend/main.py:848 SyntaxError — global declaration after use",
+      "category": "启动失败",
+      "affected_component": "backend/main.py:848",
+      "root_cause": "Python 3.12+ enforces that `global` declarations must appear before any use of the name in the function scope",
+      "suggested_action": "Move the `global _quick_questions_cache, _quick_questions_cache_time` statement to function start before line 664"
+    },
+    {
+      "severity": "P0",
+      "title": "缺少依赖 jieba 导致 test_retrievers.py 无法收集",
+      "category": "环境失败",
+      "affected_component": "test/test_retrievers.py:11",
+      "root_cause": "jieba 中文分词库未安装，未在 requirements.txt 中显式声明",
+      "suggested_action": "pip install jieba，并将 jieba 添加到依赖声明文件"
+    },
+    {
+      "severity": "P0",
+      "title": "test_create_session 断言失败：Session ID 从8位改为36位UUID",
+      "category": "测试失败",
+      "affected_component": "test/test_sessions.py:127",
+      "root_cause": "sessions.py 将 session_id 改为 uuid.uuid4()，测试未同步更新",
+      "suggested_action": "将 assert len(sid) == 8 改为 assert len(sid) == 36"
+    },
+    {
+      "severity": "P0",
+      "title": "JWT Token 存储在 localStorage 中，存在 XSS 窃取风险",
+      "category": "安全",
+      "affected_component": "frontend/src/stores/auth.js:21",
+      "root_cause": "JWT 明文存储在 localStorage，JavaScript 可随时读取",
+      "suggested_action": "迁移到 httpOnly Cookie 或使用 sessionStorage + refresh token"
+    },
+    {
+      "severity": "P0",
+      "title": "Auth Store logout() 直接变异 Pinia store 的内部状态",
+      "category": "应用失败",
+      "affected_component": "frontend/src/stores/auth.js:51-56",
+      "root_cause": "logout 方法绕过 Pinia 响应式系统，直接操作内部 ref",
+      "suggested_action": "在 sessions store 中添加 resetSessions() action 并在 logout 中调用"
+    },
+    {
+      "severity": "P0",
+      "title": "请求日志中间件泄露明文密码",
+      "category": "安全",
+      "affected_component": "backend/main.py:80-106",
+      "root_cause": "log_requests 中间件未过滤 password 等敏感字段",
+      "suggested_action": "过滤掉 password、token、secret 等敏感字段替换为 '***'"
+    },
+    {
+      "severity": "P0",
+      "title": "pickle 反序列化存在潜在 RCE 风险",
+      "category": "安全",
+      "affected_component": "backend/data/bm25_index.py:73; backend/storage/faiss_client.py:93",
+      "root_cause": "使用 pickle.load() 反序列化本地文件，pickle 会执行任意代码",
+      "suggested_action": "替换为 JSON/MessagePack 或添加 HMAC 完整性校验"
+    },
+    {
+      "severity": "P0",
+      "title": "ESLint 配置缺失",
+      "category": "代码质量",
+      "affected_component": "frontend/ 根目录",
+      "root_cause": "项目初始化时未添加 ESLint 配置",
+      "suggested_action": "初始化 ESLint 配置：npm init @eslint/config"
+    },
+    {
+      "severity": "P1",
+      "title": "RAG检索管线无并行优化",
+      "category": "性能",
+      "affected_component": "backend/agent/tool_implementations.py",
+      "root_cause": "FAISS搜索和BM25搜索串行执行",
+      "suggested_action": "使用 asyncio.gather() 并行执行 FAISS + BM25"
+    },
+    {
+      "severity": "P1",
+      "title": "SSE 流式连接缺少超时机制和自动重连逻辑",
+      "category": "应用失败",
+      "affected_component": "frontend/src/api.js:232-292",
+      "root_cause": "fetch ReadableStream 无超时保护和重连机制",
+      "suggested_action": "添加 AbortSignal.timeout() 和自动重连逻辑"
+    },
+    {
+      "severity": "P1",
+      "title": "tool_call 结果更新到错误会话——会话切换竞态条件",
+      "category": "应用失败",
+      "affected_component": "frontend/src/stores/sessions.js:318-337",
+      "root_cause": "updateToolCallResult 使用 currentSessionId 而非原始会话 ID",
+      "suggested_action": "修改 updateToolCallResult 接受 sessionId 参数"
+    },
+    {
+      "severity": "P1",
+      "title": "Python 依赖存在 123 个已知 CVE 漏洞",
+      "category": "安全",
+      "affected_component": "backend/ (starlette, python-multipart, requests 等)",
+      "root_cause": "依赖版本锁定在较旧版本，无定期更新机制",
+      "suggested_action": "更新受影响包，配置 Dependabot/Renovate"
+    },
+    {
+      "severity": "P1",
+      "title": "前端 npm 依赖存在 3 个中度漏洞",
+      "category": "安全",
+      "affected_component": "frontend/package.json",
+      "root_cause": "esbuild, ws, vite 版本存在已知漏洞",
+      "suggested_action": "更新 vite>=6.4.2, ws>=8.20.1"
+    },
+    {
+      "severity": "P1",
+      "title": "Parent Document 缓存容量不足 (LRU max=100)",
+      "category": "性能",
+      "affected_component": "backend/rag/parent_document.py",
+      "root_cause": "缓存容量 100 远小于知识库 chunk 总数",
+      "suggested_action": "增大 LRU 容量至 1000+ 或改用 TTL 缓存"
+    }
+  ],
+  "generated_tests": [
+    {"name": "accessibility-button-aria-labels", "type": "unit", "framework": "vitest", "description": "验证所有交互按钮有可访问的名称", "target": "frontend/src/components/*.vue, frontend/src/views/*.vue"},
+    {"name": "accessibility-form-labels", "type": "unit", "framework": "vitest", "description": "验证所有表单输入有关联的 <label> 或 aria-label", "target": "frontend/src/views/ChatView.vue, frontend/src/components/AppSidebar.vue"},
+    {"name": "sse-timeout-handling", "type": "unit", "framework": "vitest", "description": "验证 SSE 流式连接超时处理逻辑", "target": "frontend/src/api.js"},
+    {"name": "auth-store-logout-reset", "type": "integration", "framework": "vitest", "description": "验证 logout 后 session store 正确重置", "target": "frontend/src/stores/auth.js"}
+  ],
+  "artifacts": [
+    {"path": ".deeptest/report.md", "type": "report", "description": "完整测试报告（中文），涵盖 P0-P3 共 57 项发现"}
+  ],
+  "errors": [
+    "test/test_api.py: SyntaxError blocked all integration tests",
+    "test/test_retrievers.py: ModuleNotFoundError for jieba"
+  ]
+}

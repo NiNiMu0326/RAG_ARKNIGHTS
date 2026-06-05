@@ -587,6 +587,14 @@ async function sendMessage() {
         }
       },
 
+      onThinkingDone(event) {
+        // Replace accumulated thinking with complete content from backend
+        // This ensures we have the full thinking even if delta streaming was incomplete
+        if (event.reasoning_content) {
+          currentThinking.value = event.reasoning_content
+        }
+      },
+
       onAnswerDone(event) {
         const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
         // Save thinking as independent message if present

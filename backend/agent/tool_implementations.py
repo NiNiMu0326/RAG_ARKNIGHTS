@@ -167,6 +167,9 @@ async def execute_web_search(arguments: Dict[str, Any], session_id: str = "") ->
     if not query:
         return [{"error": "query parameter is required"}]
 
+    # Periodically cleanup old dedup entries to prevent memory leak
+    _cleanup_web_search_seen()
+
     try:
         from backend.api.web_search import search as web_search
 
@@ -213,11 +216,22 @@ _bm25_lock = None
 
 # Web search dedup: session_id -> set of seen URLs/content keys
 _web_search_seen: Dict[str, set] = {}
+_web_search_seen_max_size = 1000  # Maximum number of sessions to track
 
 
 def clear_web_search_seen(session_id: str) -> None:
     """Clear web search dedup state for a session. Call when session expires."""
     _web_search_seen.pop(session_id, None)
+
+
+def _cleanup_web_search_seen() -> None:
+    """Remove oldest entries if web search dedup state exceeds max size."""
+    if len(_web_search_seen) > _web_search_seen_max_size:
+        # Remove oldest entries (first 20% of entries)
+        keys_to_remove = list(_web_search_seen.keys())[:len(_web_search_seen) // 5]
+        for key in keys_to_remove:
+            _web_search_seen.pop(key, None)
+        logger.info(f"[WebSearch] Cleaned up {len(keys_to_remove)} old dedup entries")
 
 
 def _get_bm25_indexes():

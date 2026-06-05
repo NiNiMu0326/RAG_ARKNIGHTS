@@ -128,18 +128,20 @@ def _partial_suffix_len(s: str, prefix: str, max_len: int) -> int:
 class DeepSeekClient:
     """Client for DeepSeek official API with connection pooling and retry logic."""
 
-    def __init__(self, api_key: str = None):
+    def __init__(self, api_key: str = None, base_url: str = None, model: str = None):
         """
         Initialize DeepSeek client.
 
         Args:
             api_key: DeepSeek API key. If not provided, loads from config.DEEPSEEK_API_KEY.
+            base_url: API base URL. If not provided, loads from config.DEEPSEEK_BASE_URL.
+            model: Model name. If not provided, loads from config.DEEPSEEK_LLM_MODEL.
         """
         self.api_key = api_key or config.DEEPSEEK_API_KEY
         if not self.api_key:
             raise ValueError("DeepSeek API key must be provided or set in DEEPSEEK_API_KEY environment variable.")
-        self.base_url = config.DEEPSEEK_BASE_URL
-        self.model = config.DEEPSEEK_LLM_MODEL
+        self.base_url = base_url or config.DEEPSEEK_BASE_URL
+        self.model = model or config.DEEPSEEK_LLM_MODEL
         self.disable_thinking = False  # Set True for models where deep thinking is overkill (e.g. MiniMax M2.7)
 
         # Create session with connection pooling and retry logic

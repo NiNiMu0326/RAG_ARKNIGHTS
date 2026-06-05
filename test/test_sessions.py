@@ -124,7 +124,7 @@ class TestSessionManager:
             sm = SessionManager(max_sessions=10)
             sid = await sm.create_session()
             assert isinstance(sid, str)
-            assert len(sid) == 8
+            assert len(sid) == 36
         asyncio.run(_test())
 
     def test_get_session(self):

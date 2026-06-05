@@ -217,16 +217,19 @@ export const api = {
    * Agent chat with SSE streaming.
    * @param {string} sessionId - Backend session ID
    * @param {string} message - User message
+   * @param {function} onThinkingStart - Callback for thinking_start event
+   * @param {function} onThinkingDelta - Callback for thinking_delta event
+   * @param {function} onThinkingDone - Callback for thinking_done event (complete reasoning content)
    * @param {function} onToolCallsStart - Callback for tool_calls_start event
+   * @param {function} onToolExecuting - Callback for tool_executing event
    * @param {function} onToolCallResult - Callback for tool_call_result event
    * @param {function} onAnswerDelta - Callback for answer_delta event
    * @param {function} onAnswerDone - Callback for answer_done event
-   * @param {function} onThinkingDelta - Callback for thinking_delta event
    * @param {function} onError - Callback for error event
    * @param {AbortSignal} signal - AbortController signal
    * @returns {Promise<void>}
    */
-  async agentChat({ sessionId, message, model, onNewSessionId, onThinkingStart, onToolCallsStart, onToolExecuting, onToolCallResult, onAnswerDelta, onAnswerDone, onThinkingDelta, onError, signal }) {
+  async agentChat({ sessionId, message, model, onNewSessionId, onThinkingStart, onThinkingDelta, onThinkingDone, onToolCallsStart, onToolExecuting, onToolCallResult, onAnswerDelta, onAnswerDone, onError, signal }) {
     const body = { session_id: sessionId, message }
     if (model) body.model = model
 
@@ -292,10 +295,11 @@ export const api = {
 function _dispatchSSEEvent(event, callbacks) {
   switch (event.type) {
     case 'thinking_start': callbacks.onThinkingStart?.(event); break
+    case 'thinking_delta': callbacks.onThinkingDelta?.(event); break
+    case 'thinking_done': callbacks.onThinkingDone?.(event); break
     case 'tool_calls_start': callbacks.onToolCallsStart?.(event); break
     case 'tool_executing': callbacks.onToolExecuting?.(event); break
     case 'tool_call_result': callbacks.onToolCallResult?.(event); break
-    case 'thinking_delta': callbacks.onThinkingDelta?.(event); break
     case 'answer_delta': callbacks.onAnswerDelta?.(event); break
     case 'answer_done': callbacks.onAnswerDone?.(event); break
     case 'error': callbacks.onError?.(event); break

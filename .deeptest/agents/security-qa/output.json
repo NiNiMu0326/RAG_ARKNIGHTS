@@ -1,0 +1,226 @@
+{
+  "status": "PARTIAL",
+  "subagent": "security-qa",
+  "findings": [
+    {
+      "severity": "P0",
+      "title": "请求日志中间件泄露明文密码",
+      "category": "安全阻止",
+      "affected_component": "backend/main.py:80-106",
+      "evidence": [
+        "backend/main.py:88-97: log_requests 中间件读取请求体并记录到日志，包括 /auth/register、/auth/login、/auth/change-password 等端点的 password 字段",
+        "代码片段: body = await request.body(); body_json = json.loads(body); log_body = {k: (v if len(str(v)) < 200 else str(v)[:200] + '...') for k, v in body_json.items()}; logger.info(f'[REQ #{req_id}] {request.method} {request.url.path}{body_info}')",
+        "password/old_password/new_password 字段会被完整记录到日志，写入 stdout/stderr，可能存在日志文件泄露风险"
+      ],
+      "reproduction_steps": [
+        "1. 启动后端服务",
+        "2. 调用 POST /auth/login 或 /auth/register 端点",
+        "3. 查看日志输出，password 字段明文可见"
+      ],
+      "root_cause": "请求日志中间件在设计时未考虑敏感字段过滤，对 POST 请求体进行全量记录，未排除 password 等敏感字段",
+      "suggested_action": "在 log_requests 中间件中过滤掉敏感字段（password、old_password、new_password、token、secret 等），替换为 '***' 后再记录"
+    },
+    {
+      "severity": "P0",
+      "title": "pickle 反序列化存在潜在 RCE 风险",
+      "category": "安全阻止",
+      "affected_component": "backend/data/bm25_index.py:73; backend/storage/faiss_client.py:93",
+      "evidence": [
+        "bandit B301: Pickle and modules that wrap it can be unsafe when used to deserialize untrusted data",
+        "bm25_index.py:73: data = pickle.load(f) — 从文件加载 BM25 索引",
+        "faiss_client.py:93: meta = pickle.load(f) — 从文件加载 FAISS 元数据",
+        "两个文件均为本地可写路径（chunks/ 和 faiss_index/ 目录）"
+      ],
+      "reproduction_steps": [
+        "1. 确认项目使用 pickle.load() 从本地文件加载数据",
+        "2. 若攻击者可写入 chunks/*.pkl 或 faiss_index/*.pkl 文件，可构造恶意 pickle 载荷实现代码执行"
+      ],
+      "root_cause": "使用 pickle 格式持久化数据，pickle 在反序列化时会执行任意代码。虽然当前场景加载的是本地受控文件，但仍是最佳实践中应避免的做法",
+      "suggested_action": "将 pickle 替换为安全序列化格式（如 JSON、MessagePack），或对 pickle 文件进行完整性校验（如 HMAC 签名），并将文件权限设置为只读"
+    },
+    {
+      "severity": "P1",
+      "title": "前端 npm 依赖存在 3 个中度漏洞",
+      "category": "发现失败",
+      "affected_component": "frontend/package.json",
+      "evidence": [
+        "npm audit 报告发现 3 个 moderate 严重级别漏洞:",
+        "esbuild <=0.24.2 — 允许任意网站向开发服务器发送请求并读取响应 (GHSA-67mh-4wv8-2f99)",
+        "ws 8.0.0-8.20.0 — 未初始化内存泄露 (GHSA-58qx-3vcg-4xpx)",
+        "vite <=6.4.1 — 依赖有漏洞的 esbuild 版本"
+      ],
+      "reproduction_steps": [
+        "1. 在 frontend/ 目录运行 npm audit",
+        "2. 查看结果中的 3 个 moderate 漏洞"
+      ],
+      "root_cause": "依赖版本未及时更新，esbuild、ws、vite 存在已知漏洞",
+      "suggested_action": "更新 vite 到 6.4.2+，更新 ws 到 8.20.1+，或运行 npm audit fix 修复可修复的漏洞"
+    },
+    {
+      "severity": "P1",
+      "title": "Python 项目依赖存在多个已知 CVE 漏洞",
+      "category": "发现失败",
+      "affected_component": "backend/ (starlette, python-multipart, requests, idna, h11, werkzeug 等)",
+      "evidence": [
+        "pip-audit 检测到 123 个已知漏洞（含 conda 环境包）",
+        "项目关键依赖有漏洞: starlette 0.48.0 (CVE-2025-62727)、python-multipart 0.0.9 (CVE-2024-53981 等)、requests 2.32.5 (CVE-2026-25645)",
+        "idna 3.7 (CVE-2026-45409)、h11 0.14.0 (CVE-2025-43859)、werkzeug 3.0.3 (多个 CVE)"
+      ],
+      "reproduction_steps": [
+        "1. 在 backend/ 目录下运行 pip-audit 或 pip list 查看依赖版本",
+        "2. 比对已知 CVE 数据库"
+      ],
+      "root_cause": "依赖版本锁定在较旧版本，项目未建立定期依赖更新机制",
+      "suggested_action": "更新受影响的包到修复版本: starlette>=0.49.1, python-multipart>=0.0.27, requests>=2.33.0, idna>=3.15, h11>=0.16.0, werkzeug>=3.1.6。建议配置 Dependabot 或 Renovate 自动跟踪依赖更新"
+    },
+    {
+      "severity": "P1",
+      "title": "JWT 过期时间过长（30 天）",
+      "category": "发现失败",
+      "affected_component": "backend/auth.py:15-58",
+      "evidence": [
+        "backend/auth.py:15: JWT_EXPIRY_DAYS = 30",
+        "backend/auth.py:57: 'exp': datetime.now(timezone.utc) + timedelta(days=JWT_EXPIRY_DAYS)",
+        "30 天的 token 有效期增加了 token 泄露后的风险窗口"
+      ],
+      "reproduction_steps": [
+        "1. 登录后获取 JWT token",
+        "2. 解码 token 查看 exp 字段确认 30 天有效期"
+      ],
+      "root_cause": "为减少用户频繁重新登录的 UX 负担，设置了过长的 token 有效期",
+      "suggested_action": "缩短 JWT 过期时间到 24 小时或更短（如 7 天），并实现 refresh token 机制以平衡安全性和用户体验"
+    },
+    {
+      "severity": "P1",
+      "title": "认证端点无速率限制",
+      "category": "发现失败",
+      "affected_component": "backend/main.py:305-355",
+      "evidence": [
+        "POST /auth/register 和 POST /auth/login 端点未实现任何频率限制/防暴力破解措施",
+        "无 IP 级别或账号级别的请求速率限制、无 CAPTCHA、无账户锁定机制"
+      ],
+      "reproduction_steps": [
+        "1. 向 POST /auth/login 发送大量快速请求",
+        "2. 观察所有请求均正常返回，无速率限制响应"
+      ],
+      "root_cause": "未在认证端点添加速率限制中间件",
+      "suggested_action": "添加速率限制中间件（如 slowapi），对 /auth/* 端点实施 IP 级别限制（如每分钟 10 次），并在连续失败后添加账户临时锁定"
+    },
+    {
+      "severity": "P1",
+      "title": "缺少 .env.example 配置文件模板",
+      "category": "发现失败",
+      "affected_component": "backend/",
+      "evidence": [
+        "git ls-files 确认 backend/.env 未被 git 跟踪（正确做法）",
+        "但项目无 .env.example 文件说明必需的环境变量",
+        "README.md 中提到了环境变量但无可用模板文件"
+      ],
+      "reproduction_steps": [
+        "1. git clone 项目",
+        "2. 检查是否有 .env.example 文件 → 不存在",
+        "3. 新开发者需从 README 中逐一手动配置所有环境变量"
+      ],
+      "root_cause": "项目初始搭建时忽略了提供给开发者的环境配置模板",
+      "suggested_action": "创建 backend/.env.example 文件，包含所有必需（JWT_SECRET、SILICONFLOW_API_KEY）和可选环境变量的模板，不含真实密钥"
+    },
+    {
+      "severity": "P2",
+      "title": "提示词注入检测可被绕过",
+      "category": "发现失败",
+      "affected_component": "backend/agent/core.py:155-204",
+      "evidence": [
+        "提示词注入检测基于正则表达式匹配，攻击者可能通过变体/编码/分块等方式绕过",
+        "例如 'i g n o r e  i n s t r u c t i o n s'、base64 编码、Unicode 同形异义字符等",
+        "检测到后仅添加安全提示消息，仍将处理后的用户消息传递给 LLM"
+      ],
+      "reproduction_steps": [
+        "1. 构造变体形式的提示词注入 payload（如 'I g n o r e  previous instructions' 带额外空格）",
+        "2. 观察正则是否匹配"
+      ],
+      "root_cause": "基于固定正则的注入检测无法覆盖所有可能的攻击变体",
+      "suggested_action": "使用专门的 LLM 安全检测模型或 API 辅助检测；对检测到的注入直接拒绝回答而非仅仅添加安全提示；增加 Unicode 标准化预处理"
+    },
+    {
+      "severity": "P2",
+      "title": "服务器绑定到 0.0.0.0（所有网络接口）",
+      "category": "发现失败",
+      "affected_component": "backend/main.py:928",
+      "evidence": [
+        "bandit B104: Possible binding to all interfaces",
+        "backend/main.py:928: uvicorn.run(app, host='0.0.0.0', port=port)",
+        "生产环境中如未配置防火墙/反向代理，可能导致服务暴露在公网"
+      ],
+      "reproduction_steps": [
+        "1. 查看启动配置 host='0.0.0.0'",
+        "2. 检查服务器网络配置确认是否仅期望本地访问"
+      ],
+      "root_cause": "开发便利性默认绑定所有接口，生产部署需外部网络配置配合限制访问",
+      "suggested_action": "在环境变量中配置 host 参数，生产环境建议绑定到 127.0.0.1 并通过反向代理（nginx）暴露；若必须绑定 0.0.0.0，确保 iptables/安全组限制访问来源"
+    },
+    {
+      "severity": "P3",
+      "title": "MD5 用于缓存键计算（非安全用途）",
+      "category": "发现失败",
+      "affected_component": "backend/rag/retrievers.py:47",
+      "evidence": [
+        "bandit B324: Use of weak MD5 hash",
+        "backend/rag/retrievers.py:47: return hashlib.md5(key_str.encode('utf-8')).hexdigest()",
+        "该 MD5 仅用于生成缓存键（非安全用途），风险很低"
+      ],
+      "reproduction_steps": [
+        "1. 检索代码中 hashlib.md5 的调用位置",
+        "2. 确认仅用于内部缓存键生成"
+      ],
+      "root_cause": "开发中为快速缓存键生成使用了 MD5，虽无安全影响但触发 bandit 告警",
+      "suggested_action": "添加 #nosec 注释标记此行非安全用途，或替换为 hashlib.sha256 以消除告警"
+    },
+    {
+      "severity": "P3",
+      "title": "前端 escapeHtml 使用 innerHTML 读取",
+      "category": "发现失败",
+      "affected_component": "frontend/src/api.js:325-330",
+      "evidence": [
+        "found innerHTML usage in frontend/src/api.js:329",
+        "escapeHtml 函数: div.textContent = str; return div.innerHTML — 这是标准 HTML 转义模式，实际安全",
+        "在 Vue 模板中通过 {{ escapeHtml(msg.content) }} 调用，Vue 的插值表达式已自动转义"
+      ],
+      "reproduction_steps": [
+        "1. 检查 escapeHtml 函数实现",
+        "2. 确认 innerHTML 仅用于读取（转义后的 HTML 实体字符串），而非设置 HTML"
+      ],
+      "root_cause": "HTML 实体的安全读取模式，非实际 XSS 漏洞，属宽松标记",
+      "suggested_action": "无需修改（当前实现是安全的 HTML 转义标准模式），可添加注释说明"
+    }
+  ],
+  "generated_tests": [],
+  "artifacts": [
+    {
+      "name": "pip-audit 全量报告",
+      "path": ".deeptest/agents/security-qa/artifacts/pip-audit.log",
+      "description": "pip-audit 扫描结果，共 123 个已知漏洞"
+    },
+    {
+      "name": "bandit 安全扫描报告",
+      "path": ".deeptest/agents/security-qa/artifacts/bandit.log",
+      "description": "bandit 代码安全扫描结果，10 Low + 3 Medium + 1 High 问题"
+    },
+    {
+      "name": "npm audit 报告",
+      "path": ".deeptest/agents/security-qa/artifacts/npm-audit.log",
+      "description": "npm audit 前端依赖扫描结果，3 moderate 漏洞"
+    }
+  ],
+  "errors": [
+    {
+      "description": "pip-audit 扫描的是 conda 全局环境而非项目虚拟环境，结果包含大量非项目直接依赖的漏洞",
+      "component": "pip-audit",
+      "action": "建议在项目虚拟环境中单独运行 pip-audit 以获取精确的项目依赖漏洞列表"
+    },
+    {
+      "description": "safety check 命令未安装，已使用 pip-audit 替代",
+      "component": "safety",
+      "action": "如需使用 safety，运行 pip install safety"
+    }
+  ]
+}

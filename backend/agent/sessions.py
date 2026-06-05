@@ -159,7 +159,7 @@ class SessionManager:
                 self._evict_web_search_seen(oldest_id)
                 logger.info(f"[SESSION] Evicted oldest session: {oldest_id}")
 
-            session_id = str(uuid.uuid4())[:8]
+            session_id = str(uuid.uuid4())
             self._sessions[session_id] = Session(session_id=session_id)
             logger.info(f"[SESSION] Created: {session_id} (total: {len(self._sessions)})")
             return session_id

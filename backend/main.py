@@ -114,6 +114,12 @@ _session_manager = SessionManager(max_sessions=1000, ttl_seconds=3600)
 # Both /knowledge-graph and /stats need this data, and it doesn't change at runtime.
 _entity_relations_cache: Optional[Dict] = None
 
+# ===== Quick Questions Cache =====
+# Cache quick questions to avoid repeated file reads and graph traversal.
+_quick_questions_cache: Optional[List] = None
+_quick_questions_cache_time: float = 0
+_quick_questions_cache_ttl: float = 300  # 5 minutes
+
 
 def _load_entity_relations() -> Dict:
     """Load entity relations from JSON file, cached in memory."""
@@ -653,6 +659,11 @@ async def get_quick_questions():
     import random
     from backend.rag.alias_map import ALIAS_MAP
 
+    # Simple cache: return cached questions if within TTL
+    now = time.time()
+    if _quick_questions_cache and now - _quick_questions_cache_time < _quick_questions_cache_ttl:
+        return {"questions": _quick_questions_cache}
+
     questions = []
 
     # ===== 1. 关系问题：基于 GraphRAG 图中有连线的干员对 =====
@@ -832,6 +843,11 @@ async def get_quick_questions():
             "question": "银灰的其他名称有哪些",
             "type": "alias",
         })
+
+    # Update cache
+    global _quick_questions_cache, _quick_questions_cache_time
+    _quick_questions_cache = questions
+    _quick_questions_cache_time = time.time()
 
     return {"questions": questions}
 

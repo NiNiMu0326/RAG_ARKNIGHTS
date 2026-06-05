@@ -1,0 +1,71 @@
+{
+  "root": "D:\\Agent\\ARKNIGHTSAgent",
+  "project_types": ["web-app", "api-service"],
+  "languages": ["python", "javascript"],
+  "frameworks": {
+    "frontend": ["vite", "vue3"],
+    "backend": ["fastapi", "uvicorn"],
+    "desktop": [],
+    "mobile": []
+  },
+  "test_frameworks": ["pytest"],
+  "package_manager": "npm+pip",
+  "database": {
+    "orm": "aiosqlite",
+    "models": 2
+  },
+  "existing_tests": {
+    "directories": ["test"],
+    "files": 10
+  },
+  "candidate_services": [
+    {
+      "name": "backend",
+      "working_directory": "backend",
+      "command": "uvicorn main:app --host 0.0.0.0 --port 8100",
+      "expected_port": 8100,
+      "health_check": "http://localhost:8100/health",
+      "required_environment": ["JWT_SECRET", "SILICONFLOW_API_KEY"]
+    },
+    {
+      "name": "frontend",
+      "working_directory": "frontend",
+      "command": "npm run dev",
+      "expected_port": 5300,
+      "health_check": "http://localhost:5300/",
+      "required_environment": []
+    }
+  ],
+  "compose_files": [],
+  "env_examples": [],
+  "env_file": "backend/.env",
+  "infra_files": [],
+  "playwright_config": null,
+  "complexity": "medium",
+  "risks": [
+    "生产服务器配置在 119.147.202.190:14602，测试仅限本地",
+    "后端 .env 包含真实 API Key，不得外泄"
+  ],
+  "user_input_features": true,
+  "performance_sensitive": true,
+  "tech_stack_detail": {
+    "backend": "FastAPI + Uvicorn + SQLite (aiosqlite)",
+    "frontend": "Vue 3 (Composition API) + Vite + Pinia",
+    "llm": "DeepSeek-V4-Flash / MiniMax-M2.7 (OpenAI 兼容 API)",
+    "embeddings": "BAAI/bge-m3 (SiliconFlow)",
+    "reranker": "BAAI/bge-reranker-v2-m3 (SiliconFlow)",
+    "rag": "FAISS + BM25 + RRF 融合 + Cross-Encoder 重排 + Parent Document 扩展",
+    "graph": "NetworkX DiGraph + Cytoscape.js 可视化",
+    "search": "Tavily API + DuckDuckGo 兜底"
+  },
+  "sse_events": [
+    "thinking_start", "thinking_delta", "tool_calls_start",
+    "tool_executing", "tool_call_result", "answer_delta",
+    "answer_done", "error"
+  ],
+  "max_rounds": 8,
+  "session_ttl": 3600,
+  "auth_method": "JWT",
+  "git_branch": "master",
+  "git_status": "modified: backend/agent/sessions.py, backend/agent/tool_implementations.py, backend/api/deepseek.py, backend/main.py, frontend/src/api.js, frontend/src/views/ChatView.vue"
+}

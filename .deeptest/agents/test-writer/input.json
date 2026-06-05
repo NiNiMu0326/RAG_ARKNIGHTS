@@ -1,0 +1,66 @@
+{
+  "agent": "test-writer",
+  "phase": 2,
+  "description": "将发现转化为可复用的测试文件",
+  "project_root": "D:\\Agent\\ARKNIGHTSAgent",
+  "project_types": [
+    "web-app",
+    "api-service"
+  ],
+  "languages": [
+    "python",
+    "javascript"
+  ],
+  "frameworks": {
+    "frontend": [
+      "vite",
+      "vue3"
+    ],
+    "backend": [
+      "fastapi",
+      "uvicorn"
+    ],
+    "desktop": [],
+    "mobile": []
+  },
+  "test_frameworks": [
+    "pytest"
+  ],
+  "package_manager": "npm+pip",
+  "existing_tests": {
+    "directories": [
+      "test"
+    ],
+    "files": 10
+  },
+  "candidate_services": [
+    {
+      "name": "backend",
+      "working_directory": "backend",
+      "command": "uvicorn main:app --host 0.0.0.0 --port 8100",
+      "expected_port": 8100,
+      "health_check": "http://localhost:8100/health",
+      "required_environment": [
+        "JWT_SECRET",
+        "SILICONFLOW_API_KEY"
+      ]
+    },
+    {
+      "name": "frontend",
+      "working_directory": "frontend",
+      "command": "npm run dev",
+      "expected_port": 5300,
+      "health_check": "http://localhost:5300/",
+      "required_environment": []
+    }
+  ],
+  "scope": [
+    "test-generation"
+  ],
+  "tools": [
+    "pytest",
+    "jest",
+    "go test"
+  ],
+  "needs_service": false
+}
