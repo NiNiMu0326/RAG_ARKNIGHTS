@@ -1,4 +1,4 @@
-"""
+﻿"""
 Arknights RAG Backend - FastAPI Server
 Provides REST API for the frontend
 """
@@ -660,6 +660,7 @@ async def get_quick_questions():
     from backend.rag.alias_map import ALIAS_MAP
 
     # Simple cache: return cached questions if within TTL
+    global _quick_questions_cache, _quick_questions_cache_time
     now = time.time()
     if _quick_questions_cache and now - _quick_questions_cache_time < _quick_questions_cache_ttl:
         return {"questions": _quick_questions_cache}
@@ -845,7 +846,6 @@ async def get_quick_questions():
         })
 
     # Update cache
-    global _quick_questions_cache, _quick_questions_cache_time
     _quick_questions_cache = questions
     _quick_questions_cache_time = time.time()
 
