@@ -1,7 +1,7 @@
-"""
+﻿"""
 Unified LLM Client Factory.
 Creates the appropriate client based on model name.
-Supports: DeepSeek, MiniMax
+Supports: DeepSeek
 """
 
 import logging
@@ -19,14 +19,9 @@ MODEL_REGISTRY = {
         "model_name": "deepseek-v4-flash",
         "display_name": "DeepSeek-V4-Flash (DeepSeek官方)",
     },
-    "minimax-m2.7": {
-        "provider": "minimax",
-        "model_name": "MiniMax-M2.7",
-        "display_name": "MiniMax-M2.7",
-    },
 }
 
-DEFAULT_MODEL = "minimax-m2.7"
+DEFAULT_MODEL = "deepseek-chat"
 
 
 def get_model_info(model_id: str) -> dict:
@@ -59,22 +54,6 @@ def _get_deepseek_client(model_name: str = None) -> DeepSeekClient:
     return _clients[key]
 
 
-def _get_minimax_client(model_name: str) -> DeepSeekClient:
-    """Get or create a MiniMax chat client (OpenAI-compatible, reuse DeepSeekClient)."""
-    key = f"minimax:{model_name}"
-    if key not in _clients:
-        api_key = config.MINIMAX_API_KEY
-        if not api_key:
-            raise ValueError("MiniMax API key not configured. Set MINIMAX_API_KEY in .env")
-        client = DeepSeekClient(
-            api_key=api_key,
-            base_url="https://api.minimaxi.com/v1",
-            model=model_name
-        )
-        _clients[key] = client
-    return _clients[key]
-
-
 def get_llm_client(model_id: str = None) -> DeepSeekClient:
     """Get the LLM client for the given model_id.
 
@@ -96,7 +75,5 @@ def get_llm_client(model_id: str = None) -> DeepSeekClient:
 
     if provider == "deepseek":
         return _get_deepseek_client(model_name)
-    elif provider == "minimax":
-        return _get_minimax_client(model_name)
     else:
         raise ValueError(f"Unknown provider: {provider}")
