@@ -1,4 +1,4 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
 本文件为 Claude Code (claude.ai/code) 在此代码库中工作时提供指导。
 
@@ -272,6 +272,39 @@ python backend/data/chunker.py
 python backend/data/bm25_index.py
 python backend/build_faiss_index.py
 ```
+## 部署工作流
+
+本项目采用 **本地开发 → Git 推送 → 服务器拉取** 的工作流：
+
+1. **本地开发**：在本地 `D:\Agent\ARKNIGHTSAgent` 修改代码
+2. **Git 提交推送**：使用 `git add` + `git commit` + `git push` 推送到远程仓库
+3. **服务器部署**：SSH 登录服务器执行 `git pull` 拉取最新代码
+
+### 服务器信息
+- **地址**：119.147.202.190:14602
+- **SSH**：`ssh root@119.147.202.190 -p 14602`
+- **密码**：LLll11..
+- **项目路径**：`/root/ARKNIGHTS_AgenticRAG/`
+
+### 部署命令示例
+
+```bash
+# 本地提交并推送
+git add -A
+git commit -m "[feat] 描述改动内容"
+git push origin main
+
+# 服务器拉取更新
+ssh root@119.147.202.190 -p 14602
+cd /root/ARKNIGHTS_AgenticRAG/
+git pull
+```
+
+### 注意事项
+- 每次重要改动后必须 commit，commit message 使用中文描述
+- 推送到仓库后提醒用户到服务器执行 `git pull`
+- 服务器上可能需要重启服务才能生效（如 uvicorn）
+
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
