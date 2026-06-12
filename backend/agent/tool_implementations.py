@@ -1,4 +1,4 @@
-"""
+﻿"""
 Tool implementations for AgenticRAG.
 Each function takes a dict of arguments and returns a result.
 """
