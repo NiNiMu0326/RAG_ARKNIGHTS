@@ -44,7 +44,7 @@ class ToolCall:
 
 
 # ===== Think-tag stream parser =====
-# MiniMax-M2.x models embed reasoning inside <think...>...</think> tags
+# Some models embed reasoning inside <think...>...</think> tags
 # within the content field. This parser separates those tags from real content
 # in a streaming fashion, emitting each fragment as (type, text).
 
@@ -142,7 +142,7 @@ class DeepSeekClient:
             raise ValueError("DeepSeek API key must be provided or set in DEEPSEEK_API_KEY environment variable.")
         self.base_url = base_url or config.DEEPSEEK_BASE_URL
         self.model = model or config.DEEPSEEK_LLM_MODEL
-        self.disable_thinking = False  # Set True for models where deep thinking is overkill (e.g. MiniMax M2.7)
+        self.disable_thinking = False  # Set True for models where deep thinking is overkill
 
         # Create session with connection pooling and retry logic
         self._session = create_http_session()
@@ -198,7 +198,7 @@ class DeepSeekClient:
         tool_calls_map = {}  # index -> {id, name, arguments_str}
         finish_reason = ""
 
-        # Streaming parser for <think/> tags embedded in content (MiniMax models)
+        # Streaming parser for <think/> tags embedded in content
         tag_parser = ThinkTagParser()
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0), proxy=None, trust_env=False) as client:
@@ -243,7 +243,7 @@ class DeepSeekClient:
                         for i in range(0, len(reasoning_delta), STREAM_CHUNK_SIZE):
                             yield {"type": STREAM_EVENT_THINKING_DELTA, "content": reasoning_delta[i:i+STREAM_CHUNK_SIZE]}
 
-                    # Content delta — parse <think/> tags for models like MiniMax
+                    # Content delta — parse <think/> tags if present
                     content_delta = delta.get("content")
                     if content_delta:
                         for frag_type, frag_text in tag_parser.feed(content_delta):

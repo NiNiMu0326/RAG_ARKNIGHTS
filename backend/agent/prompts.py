@@ -14,6 +14,11 @@ SYSTEM_PROMPT = """# 角色
 - 查某个实体的所有关联 → arknights_graphrag_search(entity="XX")
 - 知识库没有或需要最新信息 → web_search
 
+# search_mode 选择规则
+- precise：查数值、属性、技能名称、敌人数据等精确信息时使用。query 用关键词形式（如"银灰 攻击力"而非"银灰的攻击力是多少"）
+- semantic：查剧情、人设、关系、设定等需要理解语义的内容时使用
+- balanced：不确定时的默认选择
+
 # 使用策略
 
 1. **并行调用**：当多个查询之间没有依赖关系时，在同一次回复中发起多个工具调用

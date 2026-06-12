@@ -32,15 +32,13 @@
 
 - max_rounds=8 纭檺鍒?- `detect_loop()` 寰幆妫€娴嬶紙鏈€杩?3 杞浉鍚?tool_calls 鍗崇粓姝級
 - LLM 鏈€澶ц緭鍑?token 闄愬埗
+### LLM 配置（`backend/api/llm_factory.py`）
+通过 OpenAI 兼容 API 统一调用，底层复用 `DeepSeekClient`。
+| model_id | model_name | Provider | 显示名称 |
+|----------|------------|----------|----------|
+| `deepseek-v4-flash` | `deepseek-v4-flash` | DeepSeek | DeepSeek-V4-Flash |
 
-### LLM 澶氭ā鍨嬶紙`backend/api/llm_factory.py`锛?
-鎵€鏈?Provider 閫氳繃 OpenAI 鍏煎 API 缁熶竴锛屽簳灞傚鐢?`DeepSeekClient`锛堝垏鎹?base_url/api_key/model锛夈€?
-| model_id | Provider | 鏄剧ず鍚嶇О |
-|----------|----------|----------|
-| `deepseek-chat` | DeepSeek | DeepSeek-V4-Flash (DeepSeek瀹樻柟) |
-| `minimax-m2.7` | MiniMax | MiniMax-M2.7 |
-
-榛樿妯″瀷锛歚minimax-m2.7`
+默认模型：`deepseek-v4-flash`
 
 ### 浼氳瘽绠＄悊锛坄backend/agent/sessions.py`锛?
 - TTL 3600 绉掞紝鏈€澶?1000 浼氳瘽锛孡RU 椹遍€?- 绾跨▼瀹夊叏锛坅syncio.Lock锛?- 鍓嶇 Pinia sessions store 鍚屾绠＄悊锛屾敮鎸?localStorage + 鏈嶅姟绔弻閲嶆寔涔呭寲
@@ -189,7 +187,6 @@
 | `JWT_SECRET` | 鏄?| JWT 绛惧悕瀵嗛挜锛屼笉璁剧疆鍒欐湇鍔℃嫆缁濆惎鍔?|
 | `DEEPSEEK_API_KEY_2` | 鍚?| DeepSeek 瀹樻柟妯″瀷 API Key |
 | `TAVILY_API_KEY` | 鍚?| Tavily 缃戠粶鎼滅储锛屼笉濉垯 DuckDuckGo 鍏滃簳 |
-| `MINIMAX_API_KEY` | 鍚?| MiniMax M2.7 妯″瀷 |
 | `PORT` | 鍚?| 鍚庣绔彛锛岄粯璁?8100 |
 
 ## 寮€鍙戞敞鎰忎簨椤?
@@ -218,7 +215,7 @@ Agent 娴佸紡瀵硅瘽浣跨敤浠ヤ笅 SSE 浜嬩欢锛屾寜鏃堕棿椤哄
 | 缁勪欢 | 鎶€鏈?|
 |------|------|
 | 鍚庣妗嗘灦 | FastAPI + Uvicorn |
-| Agent LLM | DeepSeek-V4-Flash / MiniMax-M2.7 |
+| Agent LLM | DeepSeek-V4-Flash |
 | 鍚戦噺鏁版嵁搴?| FAISS锛堝唴瀛樼储寮?+ 纾佺洏鎸佷箙鍖栵級 |
 | 宓屽叆妯″瀷 | BAAI/bge-m3锛圫iliconFlow API锛?|
 | 閲嶆帓妯″瀷 | BAAI/bge-reranker-v2-m3锛圫iliconFlow API锛?|

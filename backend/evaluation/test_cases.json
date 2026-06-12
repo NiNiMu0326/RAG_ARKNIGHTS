@@ -1,0 +1,86 @@
+[
+  {
+    "id": 1,
+    "question": "阿米娅是什么角色？",
+    "ground_truth": "阿米娅是罗德岛制药公司的公开领袖，一位充满理想与坚韧的卡特斯少女。她在一场车祸中失去双亲并感染矿石病，后被失忆前的博士救下，并与特蕾西娅、凯尔希共同组建巴别塔。",
+    "category": "operator_info",
+    "difficulty": "easy"
+  },
+  {
+    "id": 2,
+    "question": "凯尔希在罗德岛是什么身份？",
+    "ground_truth": "凯尔希是罗德岛的资深医生与重要成员，阿米娅的导师和引路人。",
+    "category": "operator_info",
+    "difficulty": "easy"
+  },
+  {
+    "id": 3,
+    "question": "明日方舟中有哪些类型的敌人？",
+    "ground_truth": "明日方舟中有多种类型的敌人，包括普通、领袖等不同地位级别，攻击类型包括近战物理、远程法术等，行动方式包括地面和空中。",
+    "category": "enemy_info",
+    "difficulty": "medium"
+  },
+  {
+    "id": 4,
+    "question": "阿米娅有哪些别名？",
+    "ground_truth": "阿米娅的别名包括：魔王、小小的魔王、异族的稚儿、异族的魔王、小兔子、温柔的孩子、娇小的卡特斯、新的魔王、我王、卡特斯女孩、文明的存续的继承者、巴别塔的领导者、阿米娅小姐、兔子小姐。",
+    "category": "operator_info",
+    "difficulty": "easy"
+  },
+  {
+    "id": 5,
+    "question": "阿米娅和博士是什么关系？",
+    "ground_truth": "博士是阿米娅最信任的伙伴，罗德岛的最高指挥官。博士是阿米娅的救命恩人、精神支柱和最重要的同伴。阿米娅将自己早年的野外生存技能归功于博士，并对他抱有无条件的信任与依赖。",
+    "category": "relationship",
+    "difficulty": "medium"
+  },
+  {
+    "id": 6,
+    "question": "霜星是什么角色？",
+    "ground_truth": "霜星是整合运动雪境小队队长。阿米娅通过感知情感，理解了霜星内心深处的痛苦与愤怒，并试图用罗德岛的理念感化她。霜星在濒死之际将希望托付给阿米娅。",
+    "category": "story_character",
+    "difficulty": "medium"
+  },
+  {
+    "id": 7,
+    "question": "阿米娅有哪些别名？",
+    "ground_truth": "阿米娅的别名包括：魔王、小小的魔王、异族的稚儿、异族的魔王、小兔子、温柔的孩子、娇小的卡特斯、新的魔王、我王、卡特斯女孩、文明的存续的继承者、巴别塔的领导者、阿米娅小姐、兔子小姐。",
+    "category": "operator_info",
+    "difficulty": "easy"
+  },
+  {
+    "id": 8,
+    "question": "阿米娅和霜星之间发生了什么？",
+    "ground_truth": "阿米娅通过感知情感，理解了霜星内心深处的痛苦与愤怒，并试图用罗德岛的理念感化她。霜星在濒死之际将希望托付给阿米娅，阿米娅则将一种治疗霜冻的药物命名为霜星以作纪念。",
+    "category": "relationship",
+    "difficulty": "hard"
+  },
+  {
+    "id": 9,
+    "question": "明日方舟一共有多少干员？",
+    "ground_truth": "明日方舟剧情wiki角色总表中列出干员共计379位。",
+    "category": "basic_stats",
+    "difficulty": "easy"
+  },
+  {
+    "id": 10,
+    "question": "特蕾西娅和阿米娅是什么关系？",
+    "ground_truth": "特蕾西娅是前任魔王，巴别塔的领袖，阿米娅力量与意志的来源。她如慈母般关爱幼年阿米娅，并在遇刺前将黑王冠和文明的存续力量传承给阿米娅，希望她改写宿命。",
+    "category": "relationship",
+    "difficulty": "hard"
+  },
+  {
+    "id": 11,
+    "question": "陈和阿米娅的关系如何？",
+    "ground_truth": "陈是龙门近卫局警司，阿米娅的朋友与合作者。两人在切尔诺伯格与龙门危机中并肩作战，阿米娅理解陈的坚韧与内心的挣扎，并在危急时刻与其情感共鸣，掌握了陈的剑术。",
+    "category": "relationship",
+    "difficulty": "hard"
+  },
+  {
+    "id": 12,
+    "question": "237-1号展柜文物是什么敌人？",
+    "ground_truth": "237-1号展柜文物种别是普通级别敌人，攻击类型为近战物理，行动方式为地面。它是一种奇妙的宝石构装体，曾在博物馆供人参观。",
+    "category": "enemy_info",
+    "difficulty": "medium"
+  }
+]

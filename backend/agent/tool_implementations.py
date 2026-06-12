@@ -20,6 +20,16 @@ async def execute_rag_search(arguments: Dict[str, Any], session_id: str = "") ->
     """
     query = arguments.get("query", "")
     top_k = arguments.get("top_k", 5)
+    search_mode = arguments.get("search_mode", "balanced")
+
+    # Map search_mode to vector_weight for RRF fusion
+    # Higher vector_weight = more semantic; lower = more BM25 keyword
+    _MODE_WEIGHTS = {
+        "precise": 0.25,    # Heavy BM25 for exact keyword matching (stats, skill names)
+        "semantic": 0.75,   # Heavy vector for meaning-based queries (lore, relationships)
+        "balanced": 0.5,    # Default even split
+    }
+    vector_weight = _MODE_WEIGHTS.get(search_mode, 0.5)
 
     if not query:
         return [{"error": "query parameter is required"}]
@@ -42,6 +52,7 @@ async def execute_rag_search(arguments: Dict[str, Any], session_id: str = "") ->
             bm25_indexes=bm25_indexes,
             top_k_per_channel=8,
             final_top_k=top_k * 3,  # Get more for reranking
+            vector_weight=vector_weight,
         )
 
         docs = retriever.invoke(query)
