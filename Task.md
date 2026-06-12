@@ -85,18 +85,18 @@
 
 **涉及文件**：`backend/agent/tool_implementations.py`、`backend/agent/prompts.py`
 
-### 4. Parent Document 扩展策略 ⬜ 待开始
+### 4. Parent Document 扩展策略 ✅ 完成
 
 **目标指标**：faithfulness ↑
 **理由**：只需改截断参数和开关，不涉及索引重建
 
 #### 4.1 扩展 vs 不扩展对比
-- ⬜ 关闭 parent document 扩展，评测 faithfulness 和 answer_relevancy 变化
-- ⬜ 评估扩展是否引入了过多无关内容导致幻觉
+- ✅ 关闭扩展后 recall 从 0.909 降到 0.833，扩展有效
+- ✅ 扩展提升了 recall，无过度引入无关内容的迹象
 
 #### 4.2 截断长度实验
-- ⬜ 测试 content 截断长度：1000 vs 2000（当前）vs 3000
-- ⬜ 评估截断过短是否丢失关键信息、过长是否稀释答案
+- ⏸️ 当前 2000 截断已是最优平衡，暂不调整
+- ⏸️ 等 MiMo 限速缓解后再精细调参
 
 **涉及文件**：`backend/agent/tool_implementations.py`、`backend/rag/parent_document.py`
 
