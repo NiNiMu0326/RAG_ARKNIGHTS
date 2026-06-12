@@ -14,14 +14,14 @@ logger = logging.getLogger(__name__)
 
 # Model registry: model_id -> {provider, model_name, display_name}
 MODEL_REGISTRY = {
-    "deepseek-chat": {
+    "deepseek-v4-flash": {
         "provider": "deepseek",
         "model_name": "deepseek-v4-flash",
-        "display_name": "DeepSeek-V4-Flash (DeepSeek官方)",
+        "display_name": "DeepSeek-V4-Flash",
     },
 }
 
-DEFAULT_MODEL = "deepseek-chat"
+DEFAULT_MODEL = "deepseek-v4-flash"
 
 
 def get_model_info(model_id: str) -> dict:

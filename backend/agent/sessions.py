@@ -73,7 +73,7 @@ class Session:
 
         Strips any non-standard fields (prefixed with _) before sending to the API.
 
-        Keeps original tool_call_ids intact — providers like MiniMax require the
+        Keeps original tool_call_ids intact — providers require the
         exact IDs they generated in previous turns to match tool results.
 
         Handles orphaned tool_calls/tool_results that may occur when a streaming

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Agent core loop for AgenticRAG.
 Implements the native parallel Function Calling loop with asyncio.gather.
 """
@@ -436,6 +436,11 @@ async def agent_loop(
                 result_summary = str(result)[:100]
             logger.info(f"[TOOL RESULT] {tc.name} ({elapsed_ms:.0f}ms): {result_summary}")
             yield format_tool_call_result(tc.id, result, time_ms=elapsed_ms, tool_name=tc.name)
+
+        # Inject grounding constraint after tool results
+        session.add_message("user", (
+            "基于以上检索结果回答用户问题。要求：只使用检索结果中的信息，不要编造检索结果中没有的信息。"
+        ))
 
         # Rebuild messages for next round
         messages = build_messages(session)

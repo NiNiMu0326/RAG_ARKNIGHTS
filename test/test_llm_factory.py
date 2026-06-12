@@ -17,7 +17,6 @@ from backend.api.llm_factory import (
 )
 from backend import config
 
-
 # ============================================================
 # Model registry validation
 # ============================================================
@@ -25,20 +24,14 @@ from backend import config
 class TestModelRegistry:
     """Verify the model registry structure."""
 
-    def test_registry_has_two_models(self):
-        assert len(MODEL_REGISTRY) == 2
+    def test_registry_has_one_model(self):
+        assert len(MODEL_REGISTRY) == 1
 
-    def test_deepseek_chat_in_registry(self):
-        assert "deepseek-chat" in MODEL_REGISTRY
-        info = MODEL_REGISTRY["deepseek-chat"]
+    def test_deepseek_v4_flash_in_registry(self):
+        assert "deepseek-v4-flash" in MODEL_REGISTRY
+        info = MODEL_REGISTRY["deepseek-v4-flash"]
         assert info["provider"] == "deepseek"
         assert info["model_name"] == "deepseek-v4-flash"
-
-    def test_minimax_m2_7_in_registry(self):
-        assert "minimax-m2.7" in MODEL_REGISTRY
-        info = MODEL_REGISTRY["minimax-m2.7"]
-        assert info["provider"] == "minimax"
-        assert info["model_name"] == "MiniMax-M2.7"
 
     def test_all_entries_have_display_name(self):
         for mid, info in MODEL_REGISTRY.items():
@@ -48,13 +41,12 @@ class TestModelRegistry:
     def test_all_entries_have_provider(self):
         for mid, info in MODEL_REGISTRY.items():
             assert "provider" in info
-            assert info["provider"] in ("deepseek", "minimax")
+            assert info["provider"] == "deepseek"
 
     def test_all_entries_have_model_name(self):
         for mid, info in MODEL_REGISTRY.items():
             assert "model_name" in info
             assert info["model_name"]
-
 
 # ============================================================
 # DEFAULT_MODEL
@@ -66,9 +58,8 @@ class TestDefaultModel:
     def test_default_model_is_in_registry(self):
         assert DEFAULT_MODEL in MODEL_REGISTRY
 
-    def test_default_model_is_minimax(self):
-        assert DEFAULT_MODEL == "minimax-m2.7"
-
+    def test_default_model_is_deepseek_v4_flash(self):
+        assert DEFAULT_MODEL == "deepseek-v4-flash"
 
 # ============================================================
 # get_model_info
@@ -78,7 +69,7 @@ class TestGetModelInfo:
     """Test model info retrieval."""
 
     def test_get_existing_model(self):
-        info = get_model_info("deepseek-chat")
+        info = get_model_info("deepseek-v4-flash")
         assert info["provider"] == "deepseek"
 
     def test_get_unknown_model_falls_back_to_default(self):
@@ -93,7 +84,6 @@ class TestGetModelInfo:
         info = get_model_info("")
         assert info == MODEL_REGISTRY[DEFAULT_MODEL]
 
-
 # ============================================================
 # get_available_models
 # ============================================================
@@ -104,7 +94,7 @@ class TestGetAvailableModels:
     def test_returns_list(self):
         models = get_available_models()
         assert isinstance(models, list)
-        assert len(models) == 2
+        assert len(models) == 1
 
     def test_each_entry_has_required_keys(self):
         models = get_available_models()
@@ -115,22 +105,15 @@ class TestGetAvailableModels:
 
     def test_deepseek_entry(self):
         models = get_available_models()
-        ds = [m for m in models if m["id"] == "deepseek-chat"]
+        ds = [m for m in models if m["id"] == "deepseek-v4-flash"]
         assert len(ds) == 1
         assert ds[0]["provider"] == "deepseek"
-
-    def test_minimax_entry(self):
-        models = get_available_models()
-        mm = [m for m in models if m["id"] == "minimax-m2.7"]
-        assert len(mm) == 1
-        assert mm[0]["provider"] == "minimax"
 
     def test_display_names_from_registry(self):
         models = get_available_models()
         for m in models:
             expected = MODEL_REGISTRY[m["id"]]["display_name"]
             assert m["display_name"] == expected
-
 
 # ============================================================
 # Get LLM client (requires API keys)
@@ -151,43 +134,24 @@ class TestGetLlmClient:
         monkeypatch.setattr(config, 'DEEPSEEK_API_KEY', '')
 
         with pytest.raises(ValueError, match="DeepSeek API key must be provided"):
-            get_llm_client("deepseek-chat")
+            get_llm_client("deepseek-v4-flash")
 
     def test_deepseek_client_cache(self, monkeypatch):
         """Same model_id should return cached client."""
         if not config.DEEPSEEK_API_KEY:
             monkeypatch.setattr(config, 'DEEPSEEK_API_KEY', 'test-key')
 
-        client1 = get_llm_client("deepseek-chat")
-        client2 = get_llm_client("deepseek-chat")
+        client1 = get_llm_client("deepseek-v4-flash")
+        client2 = get_llm_client("deepseek-v4-flash")
         assert client1 is client2
-
-    def test_different_models_different_clients(self, monkeypatch):
-        """Different model_ids should return different client instances."""
-        if not config.DEEPSEEK_API_KEY:
-            monkeypatch.setattr(config, 'DEEPSEEK_API_KEY', 'test-deepseek-key')
-        if not config.MINIMAX_API_KEY:
-            monkeypatch.setattr(config, 'MINIMAX_API_KEY', 'test-minimax-key')
-
-        client1 = get_llm_client("deepseek-chat")
-        client2 = get_llm_client("minimax-m2.7")
-        # They use different base_urls/different providers, should be different
-        assert client1 is not client2
 
     def test_get_llm_client_default(self, monkeypatch):
         """Calling with None should return default model client."""
-        if not config.MINIMAX_API_KEY:
-            monkeypatch.setattr(config, 'MINIMAX_API_KEY', 'test-key')
+        if not config.DEEPSEEK_API_KEY:
+            monkeypatch.setattr(config, 'DEEPSEEK_API_KEY', 'test-key')
 
         client = get_llm_client(None)
         assert client is not None
-
-    def test_minimax_client_missing_key(self, monkeypatch):
-        """Without MiniMax key, should raise ValueError."""
-        monkeypatch.setattr(config, 'MINIMAX_API_KEY', '')
-
-        with pytest.raises(ValueError, match="MiniMax API key not configured"):
-            get_llm_client("minimax-m2.7")
 
     def test_unknown_provider_raises(self, monkeypatch):
         """An unknown provider should raise ValueError from get_llm_client."""
@@ -200,7 +164,6 @@ class TestGetLlmClient:
 
         with pytest.raises(ValueError, match="Unknown provider"):
             get_llm_client("fake-model")
-
 
 # ============================================================
 # Client cache management
@@ -224,7 +187,7 @@ class TestClientCache:
         if not config.DEEPSEEK_API_KEY:
             monkeypatch.setattr(config, 'DEEPSEEK_API_KEY', 'test-key')
 
-        get_llm_client("deepseek-chat")
+        get_llm_client("deepseek-v4-flash")
         from backend.api.llm_factory import _clients
         cache_keys = list(_clients.keys())
         assert any(k.startswith("deepseek:") for k in cache_keys)

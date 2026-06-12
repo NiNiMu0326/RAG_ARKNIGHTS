@@ -28,6 +28,11 @@ TOOL_SCHEMAS = [
                     "top_k": {
                         "type": "integer",
                         "description": "返回结果数量，默认5"
+                    },
+                    "search_mode": {
+                        "type": "string",
+                        "enum": ["precise", "semantic", "balanced"],
+                        "description": "检索模式：precise=关键词精确匹配(数值/属性/技能名查询)；semantic=语义理解(剧情/关系/设定查询)；balanced=均衡检索(默认)"
                     }
                 },
                 "required": ["query"],

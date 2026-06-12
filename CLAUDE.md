@@ -45,14 +45,13 @@
 
 ### LLM 多模型（`backend/api/llm_factory.py`）
 
-所有 Provider 通过 OpenAI 兼容 API 统一，底层复用 `DeepSeekClient`（切换 base_url/api_key/model）。
+通过 OpenAI 兼容 API 统一调用，底层复用 `DeepSeekClient`。
 
-| model_id | Provider | 显示名称 |
-|----------|----------|----------|
-| `deepseek-chat` | DeepSeek | DeepSeek-V4-Flash (DeepSeek官方) |
-| `minimax-m2.7` | MiniMax | MiniMax-M2.7 |
+| model_id | model_name | Provider | 显示名称 |
+|----------|------------|----------|----------|
+| `deepseek-v4-flash` | `deepseek-v4-flash` | DeepSeek | DeepSeek-V4-Flash |
 
-默认模型：`minimax-m2.7`
+默认模型：`deepseek-v4-flash`
 
 ### 会话管理（`backend/agent/sessions.py`）
 
@@ -76,7 +75,7 @@
 
 | 文件 | 职责 |
 |------|------|
-| `llm_factory.py` | 多 Provider LLM 工厂，模型列表、创建客户端 |
+| `llm_factory.py` | LLM 工厂，模型注册、创建客户端 |
 | `deepseek.py` | OpenAI 兼容客户端：Chat Completion + Function Calling + SSE 流式 |
 | `siliconflow.py` | SiliconFlow API：嵌入（bge-m3）、重排（bge-reranker-v2-m3）、LLM |
 | `web_search.py` | 网络搜索：Tavily API 优先，DuckDuckGo HTML 解析兜底 |
@@ -213,7 +212,6 @@
 | `JWT_SECRET` | 是 | JWT 签名密钥，不设置则服务拒绝启动 |
 | `DEEPSEEK_API_KEY_2` | 否 | DeepSeek 官方模型 API Key |
 | `TAVILY_API_KEY` | 否 | Tavily 网络搜索，不填则 DuckDuckGo 兜底 |
-| `MINIMAX_API_KEY` | 否 | MiniMax M2.7 模型 |
 | `PORT` | 否 | 后端端口，默认 8100 |
 
 ## 开发注意事项
@@ -246,7 +244,7 @@ Agent 流式对话使用以下 SSE 事件，按时间顺序：
 | 组件 | 技术 |
 |------|------|
 | 后端框架 | FastAPI + Uvicorn |
-| Agent LLM | DeepSeek-V4-Flash / MiniMax-M2.7 |
+| Agent LLM | DeepSeek-V4-Flash |
 | 向量数据库 | FAISS（内存索引 + 磁盘持久化） |
 | 嵌入模型 | BAAI/bge-m3（SiliconFlow API） |
 | 重排模型 | BAAI/bge-reranker-v2-m3（SiliconFlow API） |
