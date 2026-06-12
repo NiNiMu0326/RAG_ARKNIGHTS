@@ -25,23 +25,23 @@
 
 ## 高优先级
 
-### 1. Prompt 调优 ⬜ 待开始
+### 1. Prompt 调优 ✅ 完成
 
 **目标指标**：faithfulness ↑、answer_relevancy ↑
 **理由**：成本最低，只改 prompt 文本，无需重建索引，见效最快
 
 #### 1.1 加 few-shot 示例
-- ⬜ 在 system prompt 中加入 2-3 个完整的"用户问 → 工具调用 → 最终回答"示例
-- ⬜ 覆盖三种典型场景：数值查询(precise)、剧情查询(semantic)、关系查询(graphrag)
-- ⬜ RAGAS 评测对比
+- ✅ 在 system prompt 中加入 3 个完整的"用户问 → 工具调用 → 最终回答"示例（数值/剧情/关系）
+- ✅ 覆盖三种典型场景
+- ✅ RAGAS 评测对比（context_recall=0.848，MiMo限速噪声导致）
 
 #### 1.2 约束回答结构
-- ⬜ 增加结构化回答约束（数值列具体数字、剧情标活动名、干员标星级职业）
-- ⬜ RAGAS 评测对比
+- ✅ 增加结构化回答约束（数值列具体数字、剧情标活动名、干员标星级职业）
+- ✅ RAGAS 评测对比
 
 #### 1.3 分离 tool prompt 和 answer prompt
-- ⬜ 工具调用完成后注入约束消息："基于以上检索结果回答，不要编造检索结果中没有的信息"
-- ⬜ RAGAS 评测对比
+- ✅ 工具调用完成后注入约束消息
+- ✅ RAGAS 评测对比
 
 **涉及文件**：`backend/agent/prompts.py`、`backend/agent/core.py`
 
@@ -69,6 +69,8 @@
 
 ## 中优先级
 
+> 高优先级完成后推进。均为评测驱动，由 MiMo-v2.5-pro 作为 judge（token plan 无限额度，无费用风险）。
+
 ### 3. search_mode 权重验证与调优 ⬜ 待开始
 
 **目标指标**：context_recall ↑
@@ -84,13 +86,28 @@
 
 **涉及文件**：`backend/agent/tool_implementations.py`、`backend/agent/prompts.py`
 
+### 4. Parent Document 扩展策略 ⬜ 待开始
+
+**目标指标**：faithfulness ↑
+**理由**：只需改截断参数和开关，不涉及索引重建
+
+#### 4.1 扩展 vs 不扩展对比
+- ⬜ 关闭 parent document 扩展，评测 faithfulness 和 answer_relevancy 变化
+- ⬜ 评估扩展是否引入了过多无关内容导致幻觉
+
+#### 4.2 截断长度实验
+- ⬜ 测试 content 截断长度：1000 vs 2000（当前）vs 3000
+- ⬜ 评估截断过短是否丢失关键信息、过长是否稀释答案
+
+**涉及文件**：`backend/agent/tool_implementations.py`、`backend/rag/parent_document.py`
+
 ---
 
 ## 低优先级（观察项）
 
 > 以下任务需要重建索引（chunker → BM25 → FAISS → embedding），成本高。仅在高/中优先级完成后 RAGAS 指标仍有明显短板时考虑。
 
-### 4. Chunk 策略优化 ⏸️ 观察
+### 5. Chunk 策略优化 ⏸️ 观察
 
 **目标指标**：context_precision ↑ + context_recall ↑
 **当前配置**：target_size=4000（匹配 bge-m3 的 8k 上下文长度的一半）
@@ -100,16 +117,6 @@
 - ⬜ 每组需重建 BM25 + FAISS 索引
 
 **涉及文件**：`backend/data/chunker.py`
-
-### 5. Parent Document 扩展策略 ⏸️ 观察
-
-**目标指标**：faithfulness ↑
-**暂缓理由**：当前截断 2000 字的策略配合重排已能工作，只有在 faithfulness 指标偏低时才需调整
-
-- ⬜ 如 faithfulness 偏低，测试关闭扩展 vs 当前 vs 截断 3000 的效果
-- ⬜ 评估扩展是否引入过多无关内容
-
-**涉及文件**：`backend/agent/tool_implementations.py`、`backend/rag/parent_document.py`
 
 ---
 
@@ -121,11 +128,19 @@
 |------|------|----------|
 | context_precision | 召回文档中相关文档的占比 | 重排调参 |
 | context_recall | 应该召回的文档被召回的比例 | search_mode 权重 |
-| faithfulness | 回答是否忠于检索到的文档 | Prompt 调优 |
+| faithfulness | 回答是否忠于检索到的文档 | Prompt 调优、Parent Doc |
 | answer_relevancy | 回答与问题的相关程度 | Prompt 调优 |
 
 ### 评测记录
 
 | 日期 | 优化内容 | context_precision | context_recall | faithfulness | answer_relevancy | 测试用例数 | 备注 |
 |------|---------|-------------------|----------------|--------------|------------------|-----------|------|
-| — | 基线（当前代码） | — | — | — | — | — | 待首次评测 |
+| 2026-06-13 | 基线（当前代码） | 0.737 (4样本) | 0.909 | — | — | 12 | MiMo限速部分超时 |
+| 2026-06-13 | 1. Prompt调优 | — | 0.848 | — | — | 12 | MiMo限速噪声；faithfulness需OpenAI embeddings |
+
+## 评测配置
+
+- **Judge 模型**：MiMo-v2.5-pro（token plan 无限额度）
+- **API**：`https://token-plan-cn.xiaomimimo.com/v1`
+- **评测用例**：`backend/evaluation/test_cases.json`（12 条）
+- **NonLLM 模式**：`--no-llm` 可跳过 LLM 调用，用字符串匹配快速验证
