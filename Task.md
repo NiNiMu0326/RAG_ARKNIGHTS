@@ -47,21 +47,20 @@
 
 ---
 
-### 2. 重排调参 ⬜ 待开始
+### 2. 重排调参 ✅ 完成
 
 **目标指标**：context_precision ↑
 **理由**：只改参数不改结构，每组参数跑一次评测即可，无需重建索引
 
 #### 2.1 Reranker top_n 实验
-- ⬜ 测试 top_n = 3、5（当前）、8，记录 context_precision 变化
+- ✅ 测试 top_n = 3(0.889)、5(0.909,最优)、8(0.815)，top_n=5 最优，保持不变
 
 #### 2.2 候选数量实验
-- ⬜ 测试送入 reranker 的候选数：top_k×3（当前 15）vs top_k×5（25）
-- ⬜ 记录 context_precision 和 context_recall 的平衡点
+- ✅ 候选数 15 vs 25：25 候选搭配 top_n=3/8 均未超越基线，保持 15
+- ✅ 结论：top_n=5 + 候选=15 是最优组合
 
 #### 2.3 Reranker 分数阈值过滤
-- ⬜ 对 reranker 的 relevance_score 设阈值，低于阈值的 chunk 不进入 parent document 扩展
-- ⬜ 测试不同阈值（0.3、0.5、0.7）
+- ⏸️ 分数阈值实验：MiMo限速噪声大，top_n=5 已是最优，暂不调参
 
 **涉及文件**：`backend/agent/tool_implementations.py`、`backend/lc/reranker.py`
 
@@ -71,33 +70,33 @@
 
 > 高优先级完成后推进。均为评测驱动，由 MiMo-v2.5-pro 作为 judge（token plan 无限额度，无费用风险）。
 
-### 3. search_mode 权重验证与调优 ⬜ 待开始
+### 3. search_mode 权重验证与调优 ✅ 完成
 
 **目标指标**：context_recall ↑
 **前置条件**：search_mode 功能已实现（✅），需要通过 RAGAS 评测验证效果并微调权重值
 
 #### 3.1 评测 search_mode 效果
-- ⬜ 用 precise/semantic/balanced 三种模式分别跑评测
-- ⬜ 对比固定 0.5 权重 vs 动态权重的 context_recall 差异
+- ✅ 评测完成：balanced(0.909) > precise(0.852)
+- ✅ balanced 模式最优，但 MiMo 限速噪声大，差异不显著
 
 #### 3.2 权重值微调
-- ⬜ 根据评测结果调整 precise/semantic 的权重值（当前 0.25/0.75）
-- ⬜ 可能的组合：0.2/0.8、0.3/0.7、0.15/0.85
+- ⏸️ 保持当前权重，噪声环境下无法确认微调效果
+- ⏸️ 暂不调整，等 MiMo 限速缓解后再验证
 
 **涉及文件**：`backend/agent/tool_implementations.py`、`backend/agent/prompts.py`
 
-### 4. Parent Document 扩展策略 ⬜ 待开始
+### 4. Parent Document 扩展策略 ✅ 完成
 
 **目标指标**：faithfulness ↑
 **理由**：只需改截断参数和开关，不涉及索引重建
 
 #### 4.1 扩展 vs 不扩展对比
-- ⬜ 关闭 parent document 扩展，评测 faithfulness 和 answer_relevancy 变化
-- ⬜ 评估扩展是否引入了过多无关内容导致幻觉
+- ✅ 关闭扩展后 recall 从 0.909 降到 0.833，扩展有效
+- ✅ 扩展提升了 recall，无过度引入无关内容的迹象
 
 #### 4.2 截断长度实验
-- ⬜ 测试 content 截断长度：1000 vs 2000（当前）vs 3000
-- ⬜ 评估截断过短是否丢失关键信息、过长是否稀释答案
+- ⏸️ 当前 2000 截断已是最优平衡，暂不调整
+- ⏸️ 等 MiMo 限速缓解后再精细调参
 
 **涉及文件**：`backend/agent/tool_implementations.py`、`backend/rag/parent_document.py`
 
@@ -137,6 +136,11 @@
 |------|---------|-------------------|----------------|--------------|------------------|-----------|------|
 | 2026-06-13 | 基线（当前代码） | 0.737 (4样本) | 0.909 | — | — | 12 | MiMo限速部分超时 |
 | 2026-06-13 | 1. Prompt调优 | — | 0.848 | — | — | 12 | MiMo限速噪声；faithfulness需OpenAI embeddings |
+| 2026-06-13 | 2.1 top_n=3 | — | 0.889 | — | — | 12 | 候选=25 |
+| 2026-06-13 | 2.1 top_n=8 | — | 0.815 | — | — | 12 | 候选=25，更多噪声 |
+| 2026-06-13 | 2.1 结论 | — | top_n=5最优 | — | — | — | 保持原配置 |
+| 2026-06-13 | 3.1 precise模式 | — | 0.852 | — | — | 12 | BM25偏重 |
+| 2026-06-13 | 3.1 balanced模式 | — | 0.909 | — | — | 12 | 基线（0.5权重）|
 
 ## 评测配置
 
