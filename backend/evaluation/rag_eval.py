@@ -41,13 +41,13 @@ JUDGE_MODELS = [
     {
         "model": "mimo-v2.5-pro",
         "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
-        "api_key": "tp-c6iso61bjstvzrfb19r3t31snnevpaxt2fon5ufkngpvkqam",
+        "api_key": "tp-clbnjho0uigusuqsio3iok408b0lzgg7gv7kp2xmrww91378",
         "name": "MiMo-v2.5-pro (primary)",
     },
     {
         "model": "mimo-v2.5-pro",
         "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
-        "api_key": "tp-clbnjho0uigusuqsio3iok408b0lzgg7gv7kp2xmrww91378",
+        "api_key": "tp-c6iso61bjstvzrfb19r3t31snnevpaxt2fon5ufkngpvkqam",
         "name": "MiMo-v2.5-pro (backup)",
     },
     {
