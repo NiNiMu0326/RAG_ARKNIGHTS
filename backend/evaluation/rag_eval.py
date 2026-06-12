@@ -152,6 +152,17 @@ def run_evaluation_with_llm(dataset, include_answer_metrics: bool = False):
     if include_answer_metrics:
         from ragas.metrics._faithfulness import faithfulness
         from ragas.metrics._answer_relevance import answer_relevancy
+        # answer_relevancy needs embeddings; use SiliconFlow bge-m3
+        from ragas.embeddings import LangchainEmbeddingsWrapper
+        from langchain_openai import OpenAIEmbeddings
+        from backend import config as _cfg
+        sf_embeddings = LangchainEmbeddingsWrapper(OpenAIEmbeddings(
+            model="Pro/BAAI/bge-m3",
+            openai_api_key=_cfg.SILICONFLOW_API_KEY,
+            openai_api_base=_cfg.SILICONFLOW_BASE_URL,
+        ))
+        answer_relevancy.embeddings = sf_embeddings
+
         metrics.append(faithfulness)
         metrics.append(answer_relevancy)
 
