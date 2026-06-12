@@ -36,6 +36,28 @@ nest_asyncio.apply()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+# ===== Judge LLM 模型配置 (按优先级排列，限速时自动切换) =====
+JUDGE_MODELS = [
+    {
+        "model": "mimo-v2.5-pro",
+        "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+        "api_key": "tp-c6iso61bjstvzrfb19r3t31snnevpaxt2fon5ufkngpvkqam",
+        "name": "MiMo-v2.5-pro (primary)",
+    },
+    {
+        "model": "mimo-v2.5-pro",
+        "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+        "api_key": "tp-clbnjho0uigusuqsio3iok408b0lzgg7gv7kp2xmrww91378",
+        "name": "MiMo-v2.5-pro (backup)",
+    },
+    {
+        "model": "deepseek-v4-pro",
+        "base_url": "https://api.deepseek.com",
+        "api_key": "sk-0ec8deb73a9144039d91d14379e6e1eb",
+        "name": "DeepSeek-v4-pro (fallback)",
+    },
+]
+
 
 async def generate_answer(question: str, contexts: List[str], model: str = "deepseek-v4-flash") -> str:
     """Generate an answer using LLM based on retrieved contexts.
@@ -115,7 +137,7 @@ def run_evaluation_no_llm(dataset):
 
 
 def run_evaluation_with_llm(dataset, include_answer_metrics: bool = False):
-    """\u4f7f\u7528 LLM \u6307\u6807\u8bc4\u4f30 (\u901a\u8fc7 MiMo-v2.5-pro)\u3002"""
+    """使用 LLM 指标评估，支持多 judge 模型自动 failover。"""
     import warnings
     warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -125,16 +147,6 @@ def run_evaluation_with_llm(dataset, include_answer_metrics: bool = False):
     from langchain_openai import ChatOpenAI
     from ragas.llms import LangchainLLMWrapper
 
-    judge_llm = ChatOpenAI(
-        model="mimo-v2.5-pro",
-        base_url="https://token-plan-cn.xiaomimimo.com/v1",
-        api_key="tp-c6iso61bjstvzrfb19r3t31snnevpaxt2fon5ufkngpvkqam",
-        temperature=0,
-        timeout=60,
-        max_tokens=8192,
-    )
-    wrapped_llm = LangchainLLMWrapper(judge_llm)
-
     metrics = [context_precision, context_recall]
 
     if include_answer_metrics:
@@ -143,13 +155,38 @@ def run_evaluation_with_llm(dataset, include_answer_metrics: bool = False):
         metrics.append(faithfulness)
         metrics.append(answer_relevancy)
 
-    for m in metrics:
-        if hasattr(m, 'llm'):
-            m.llm = wrapped_llm
+    # 尝试每个 judge 模型，限速(429)或失败时自动切换到下一个
+    last_error = None
+    for model_cfg in JUDGE_MODELS:
+        try:
+            judge_llm = ChatOpenAI(
+                model=model_cfg["model"],
+                base_url=model_cfg["base_url"],
+                api_key=model_cfg["api_key"],
+                temperature=0,
+                timeout=60,
+                max_tokens=8192,
+            )
+            wrapped_llm = LangchainLLMWrapper(judge_llm)
 
-    logger.info("\u4f7f\u7528 LLM \u6307\u6807\u8bc4\u4f30 (MiMo-v2.5-pro \u4f5c\u4e3a judge)...")
-    result = evaluate(dataset=dataset, metrics=metrics)
-    return result
+            for m in metrics:
+                if hasattr(m, 'llm'):
+                    m.llm = wrapped_llm
+
+            logger.info(f"使用 LLM 指标评估 ({model_cfg['name']} 作为 judge)...")
+            result = evaluate(dataset=dataset, metrics=metrics)
+            return result
+        except Exception as e:
+            err_str = str(e).lower()
+            if "429" in err_str or "rate" in err_str or "limit" in err_str or "quota" in err_str:
+                logger.warning(f"Judge {model_cfg['name']} 被限速，切换到下一个模型...")
+                last_error = e
+                continue
+            else:
+                raise
+
+    raise RuntimeError(f"所有 judge 模型均失败，最后一个错误: {last_error}")
+
 
 
 async def build_dataset(test_cases: List[Dict], top_k: int = 5, search_mode: str = "balanced",
