@@ -39,22 +39,16 @@ logger = logging.getLogger(__name__)
 # ===== Judge LLM 模型配置 (按优先级排列，限速时自动切换) =====
 JUDGE_MODELS = [
     {
+        "model": "deepseek-v4-flash",
+        "base_url": "https://api.deepseek.com",
+        "api_key": "sk-0ec8deb73a9144039d91d14379e6e1eb",
+        "name": "DeepSeek-v4-flash (primary)",
+    },
+    {
         "model": "mimo-v2.5-pro",
         "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
         "api_key": "tp-clbnjho0uigusuqsio3iok408b0lzgg7gv7kp2xmrww91378",
-        "name": "MiMo-v2.5-pro (primary)",
-    },
-    {
-        "model": "mimo-v2.5-pro",
-        "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
-        "api_key": "tp-c6iso61bjstvzrfb19r3t31snnevpaxt2fon5ufkngpvkqam",
         "name": "MiMo-v2.5-pro (backup)",
-    },
-    {
-        "model": "deepseek-v4-pro",
-        "base_url": "https://api.deepseek.com",
-        "api_key": "sk-0ec8deb73a9144039d91d14379e6e1eb",
-        "name": "DeepSeek-v4-pro (fallback)",
     },
 ]
 
@@ -175,17 +169,20 @@ def run_evaluation_with_llm(dataset, include_answer_metrics: bool = False):
                 base_url=model_cfg["base_url"],
                 api_key=model_cfg["api_key"],
                 temperature=0,
-                timeout=60,
+                timeout=120,
                 max_tokens=8192,
             )
-            wrapped_llm = LangchainLLMWrapper(judge_llm)
+            wrapped_llm = LangchainLLMWrapper(judge_llm, bypass_n=True)
 
             for m in metrics:
                 if hasattr(m, 'llm'):
                     m.llm = wrapped_llm
 
             logger.info(f"使用 LLM 指标评估 ({model_cfg['name']} 作为 judge)...")
-            result = evaluate(dataset=dataset, metrics=metrics)
+            from ragas.run_config import RunConfig
+            run_config = RunConfig(max_workers=4, max_retries=3, max_wait=30, timeout=120)
+            logger.info(f"RunConfig: max_workers={run_config.max_workers}, max_retries={run_config.max_retries}")
+            result = evaluate(dataset=dataset, metrics=metrics, run_config=run_config)
             return result
         except Exception as e:
             err_str = str(e).lower()
@@ -398,13 +395,13 @@ async def main():
     if args.no_llm:
         result = run_evaluation_no_llm(dataset)
         metrics_names = [
-            "nv_context_relevance",
+            "context_precision",
             "context_recall",
         ]
     else:
         result = run_evaluation_with_llm(dataset, include_answer_metrics=args.with_answer)
         metrics_names = [
-            "nv_context_relevance",
+            "context_precision",
             "context_recall",
         ]
         if args.with_answer:

@@ -19,7 +19,7 @@ async def execute_rag_search(arguments: Dict[str, Any], session_id: str = "") ->
     Returns list of {content, source, score} dicts.
     """
     query = arguments.get("query", "")
-    top_k = arguments.get("top_k", 5)
+    top_k = arguments.get("top_k", 8)
     search_mode = arguments.get("search_mode", "balanced")
 
     # Map search_mode to vector_weight for RRF fusion
