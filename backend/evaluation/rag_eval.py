@@ -39,22 +39,16 @@ logger = logging.getLogger(__name__)
 # ===== Judge LLM 模型配置 (按优先级排列，限速时自动切换) =====
 JUDGE_MODELS = [
     {
+        "model": "deepseek-v4-flash",
+        "base_url": "https://api.deepseek.com",
+        "api_key": "sk-0ec8deb73a9144039d91d14379e6e1eb",
+        "name": "DeepSeek-v4-flash (primary)",
+    },
+    {
         "model": "mimo-v2.5-pro",
         "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
         "api_key": "tp-clbnjho0uigusuqsio3iok408b0lzgg7gv7kp2xmrww91378",
-        "name": "MiMo-v2.5-pro (primary)",
-    },
-    {
-        "model": "mimo-v2.5-pro",
-        "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
-        "api_key": "tp-c6iso61bjstvzrfb19r3t31snnevpaxt2fon5ufkngpvkqam",
         "name": "MiMo-v2.5-pro (backup)",
-    },
-    {
-        "model": "deepseek-v4-pro",
-        "base_url": "https://api.deepseek.com",
-        "api_key": "sk-0ec8deb73a9144039d91d14379e6e1eb",
-        "name": "DeepSeek-v4-pro (fallback)",
     },
 ]
 
@@ -115,11 +109,11 @@ async def generate_answer(question: str, contexts: List[str], model: str = "deep
         return ""
 
 
-async def retrieve_contexts(question: str, top_k: int = 5, search_mode: str = "balanced") -> List[str]:
+async def retrieve_contexts(question: str, top_k: int = 5, search_mode: str = "balanced", enable_parent_expansion: bool = True) -> List[str]:
     """\u8c03\u7528 RAG \u68c0\u7d22\u83b7\u53d6\u4e0a\u4e0b\u6587\u6587\u672c\u5217\u8868\u3002"""
     from backend.agent.tool_implementations import execute_rag_search
 
-    result = await execute_rag_search({"query": question, "top_k": top_k, "search_mode": search_mode})
+    result = await execute_rag_search({"query": question, "top_k": top_k, "search_mode": search_mode, "enable_parent_expansion": enable_parent_expansion})
 
     contexts = []
     for item in result:
@@ -175,17 +169,20 @@ def run_evaluation_with_llm(dataset, include_answer_metrics: bool = False):
                 base_url=model_cfg["base_url"],
                 api_key=model_cfg["api_key"],
                 temperature=0,
-                timeout=60,
+                timeout=120,
                 max_tokens=8192,
             )
-            wrapped_llm = LangchainLLMWrapper(judge_llm)
+            wrapped_llm = LangchainLLMWrapper(judge_llm, bypass_n=True)
 
             for m in metrics:
                 if hasattr(m, 'llm'):
                     m.llm = wrapped_llm
 
             logger.info(f"使用 LLM 指标评估 ({model_cfg['name']} 作为 judge)...")
-            result = evaluate(dataset=dataset, metrics=metrics)
+            from ragas.run_config import RunConfig
+            run_config = RunConfig(max_workers=4, max_retries=3, max_wait=30, timeout=120)
+            logger.info(f"RunConfig: max_workers={run_config.max_workers}, max_retries={run_config.max_retries}")
+            result = evaluate(dataset=dataset, metrics=metrics, run_config=run_config)
             return result
         except Exception as e:
             err_str = str(e).lower()
@@ -202,7 +199,8 @@ def run_evaluation_with_llm(dataset, include_answer_metrics: bool = False):
 
 async def build_dataset(test_cases: List[Dict], top_k: int = 5, search_mode: str = "balanced",
                         use_reference_contexts: bool = False,
-                        with_answer: bool = False):
+                        with_answer: bool = False,
+                        enable_parent_expansion: bool = True):
     """\u6784\u5efa RAGAS \u8bc4\u4f30\u6570\u636e\u96c6\u3002
 
     RAGAS 0.4.x \u65e7\u7248\u63a5\u53e3\u5217\u540d:
@@ -341,6 +339,32 @@ def save_results(result_df, output_dir: str = "backend/evaluation/results"):
     return csv_path, json_path
 
 
+def append_history(result_df, metrics_names: list, tag: str = "",
+                   output_dir: str = "backend/evaluation/results",
+                   extra_info: dict = None):
+    """追加一行评测记录到 eval_history.jsonl。"""
+    os.makedirs(output_dir, exist_ok=True)
+    history_path = os.path.join(output_dir, "eval_history.jsonl")
+
+    record = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "tag": tag,
+        "num_cases": len(result_df),
+    }
+    for col in metrics_names:
+        if col in result_df.columns:
+            vals = result_df[col].dropna()
+            record[col] = round(float(vals.mean()), 4) if len(vals) > 0 else None
+    if extra_info:
+        record.update(extra_info)
+
+    with open(history_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    logger.info(f"评测记录已追加: {history_path}  tag={tag}")
+    return history_path
+
+
 async def main():
     parser = argparse.ArgumentParser(description="RAG \u68c0\u7d22\u8d28\u91cf\u8bc4\u4f30")
     parser.add_argument("--test-file", default="backend/evaluation/test_cases.json",
@@ -350,7 +374,10 @@ async def main():
                         help="\u4f7f\u7528 NonLLM \u6307\u6807 (\u66f4\u5feb\u4f46\u7cbe\u5ea6\u8f83\u4f4e)")
     parser.add_argument("--with-answer", action="store_true",
                         help="\u751f\u6210\u56de\u7b54\u5e76\u8bc4\u4f30 faithfulness/answer_relevancy")
+    parser.add_argument("--no-parent-expansion", action="store_true",
+                        help="?? Parent Document ??????????")
     parser.add_argument("--search-mode", default="balanced", choices=["precise", "semantic", "balanced"], help="search_mode for RAG retrieval")
+    parser.add_argument("--tag", default="", help="本轮评测标签，写入 eval_history.jsonl")
     parser.add_argument("--output-dir", default="backend/evaluation/results",
                         help="\u7ed3\u679c\u8f93\u51fa\u76ee\u5f55")
     args = parser.parse_args()
@@ -364,6 +391,7 @@ async def main():
         test_cases, top_k=args.top_k, search_mode=args.search_mode,
         use_reference_contexts=args.no_llm,
         with_answer=args.with_answer,
+        enable_parent_expansion=not args.no_parent_expansion,
     )
     if dataset is None:
         sys.exit(1)
@@ -371,13 +399,13 @@ async def main():
     if args.no_llm:
         result = run_evaluation_no_llm(dataset)
         metrics_names = [
-            "nv_context_relevance",
+            "context_precision",
             "context_recall",
         ]
     else:
         result = run_evaluation_with_llm(dataset, include_answer_metrics=args.with_answer)
         metrics_names = [
-            "nv_context_relevance",
+            "context_precision",
             "context_recall",
         ]
         if args.with_answer:
@@ -386,7 +414,15 @@ async def main():
     result_df = result.to_pandas()
     print_results(result_df, metrics_names)
 
-    save_results(result_df, args.output_dir)
+    csv_path, json_path = save_results(result_df, args.output_dir)
+
+    extra = {
+        "mode": "no-llm" if args.no_llm else ("with-answer" if args.with_answer else "llm"),
+        "search_mode": args.search_mode,
+        "top_k": args.top_k,
+        "csv_file": os.path.basename(csv_path),
+    }
+    append_history(result_df, metrics_names, tag=args.tag, output_dir=args.output_dir, extra_info=extra)
 
 
 if __name__ == "__main__":
