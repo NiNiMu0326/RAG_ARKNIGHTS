@@ -341,6 +341,32 @@ def save_results(result_df, output_dir: str = "backend/evaluation/results"):
     return csv_path, json_path
 
 
+def append_history(result_df, metrics_names: list, tag: str = "",
+                   output_dir: str = "backend/evaluation/results",
+                   extra_info: dict = None):
+    """追加一行评测记录到 eval_history.jsonl。"""
+    os.makedirs(output_dir, exist_ok=True)
+    history_path = os.path.join(output_dir, "eval_history.jsonl")
+
+    record = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "tag": tag,
+        "num_cases": len(result_df),
+    }
+    for col in metrics_names:
+        if col in result_df.columns:
+            vals = result_df[col].dropna()
+            record[col] = round(float(vals.mean()), 4) if len(vals) > 0 else None
+    if extra_info:
+        record.update(extra_info)
+
+    with open(history_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    logger.info(f"评测记录已追加: {history_path}  tag={tag}")
+    return history_path
+
+
 async def main():
     parser = argparse.ArgumentParser(description="RAG \u68c0\u7d22\u8d28\u91cf\u8bc4\u4f30")
     parser.add_argument("--test-file", default="backend/evaluation/test_cases.json",
@@ -351,6 +377,7 @@ async def main():
     parser.add_argument("--with-answer", action="store_true",
                         help="\u751f\u6210\u56de\u7b54\u5e76\u8bc4\u4f30 faithfulness/answer_relevancy")
     parser.add_argument("--search-mode", default="balanced", choices=["precise", "semantic", "balanced"], help="search_mode for RAG retrieval")
+    parser.add_argument("--tag", default="", help="本轮评测标签，写入 eval_history.jsonl")
     parser.add_argument("--output-dir", default="backend/evaluation/results",
                         help="\u7ed3\u679c\u8f93\u51fa\u76ee\u5f55")
     args = parser.parse_args()
@@ -386,7 +413,15 @@ async def main():
     result_df = result.to_pandas()
     print_results(result_df, metrics_names)
 
-    save_results(result_df, args.output_dir)
+    csv_path, json_path = save_results(result_df, args.output_dir)
+
+    extra = {
+        "mode": "no-llm" if args.no_llm else ("with-answer" if args.with_answer else "llm"),
+        "search_mode": args.search_mode,
+        "top_k": args.top_k,
+        "csv_file": os.path.basename(csv_path),
+    }
+    append_history(result_df, metrics_names, tag=args.tag, output_dir=args.output_dir, extra_info=extra)
 
 
 if __name__ == "__main__":

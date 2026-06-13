@@ -1,4 +1,4 @@
-﻿# RAG 系统优化任务清单
+# RAG 系统优化任务清单
 
 基于 RAGAS 评测驱动的系统调优计划。
 
@@ -25,42 +25,42 @@
 
 ## 高优先级
 
-### 1. Prompt 调优 ✅ 完成
+### 1. Prompt 调优 ⬜ 待做（需用 LLM 模式重跑评测）
 
 **目标指标**：faithfulness ↑、answer_relevancy ↑
 **理由**：成本最低，只改 prompt 文本，无需重建索引，见效最快
 
 #### 1.1 加 few-shot 示例
-- ✅ 在 system prompt 中加入 3 个完整的"用户问 → 工具调用 → 最终回答"示例（数值/剧情/关系）
-- ✅ 覆盖三种典型场景
-- ✅ RAGAS 评测对比（context_recall=0.848，MiMo限速噪声导致）
+- ? 在 system prompt 中加入 3 个完整的"用户问 → 工具调用 → 最终回答"示例（数值/剧情/关系）
+- ? 覆盖三种典型场景
+- ? RAGAS 评测（旧数据：context_recall=0.848，MiMo限速不可靠，需重跑）
 
 #### 1.2 约束回答结构
-- ✅ 增加结构化回答约束（数值列具体数字、剧情标活动名、干员标星级职业）
-- ✅ RAGAS 评测对比
+- ? 增加结构化回答约束（数值列具体数字、剧情标活动名、干员标星级职业）
+- ? RAGAS 评测对比
 
 #### 1.3 分离 tool prompt 和 answer prompt
-- ✅ 工具调用完成后注入约束消息
-- ✅ RAGAS 评测对比
+- ? 工具调用完成后注入约束消息
+- ? RAGAS 评测对比
 
 **涉及文件**：`backend/agent/prompts.py`、`backend/agent/core.py`
 
 ---
 
-### 2. 重排调参 ✅ 完成
+### 2. 重排调参 ⬜ 待做（需用 LLM 模式重跑评测）
 
 **目标指标**：context_precision ↑
 **理由**：只改参数不改结构，每组参数跑一次评测即可，无需重建索引
 
 #### 2.1 Reranker top_n 实验
-- ✅ 测试 top_n = 3(0.889)、5(0.909,最优)、8(0.815)，top_n=5 最优，保持不变
+- ? 重跑评测：top_n=3/5/8（旧数据：0.889/0.909/0.815，MiMo限速不可靠）
 
 #### 2.2 候选数量实验
-- ✅ 候选数 15 vs 25：25 候选搭配 top_n=3/8 均未超越基线，保持 15
-- ✅ 结论：top_n=5 + 候选=15 是最优组合
+- ? 重跑评测：候选数 15 vs 25（旧数据：25未超越基线）
+- ? 结论待重跑确认
 
 #### 2.3 Reranker 分数阈值过滤
-- ⏸️ 分数阈值实验：MiMo限速噪声大，top_n=5 已是最优，暂不调参
+- ?? 分数阈值实验：MiMo限速噪声大，top_n=5 已是最优，暂不调参
 
 **涉及文件**：`backend/agent/tool_implementations.py`、`backend/lc/reranker.py`
 
@@ -70,33 +70,33 @@
 
 > 高优先级完成后推进。均为评测驱动，由 MiMo-v2.5-pro 作为 judge（token plan 无限额度，无费用风险）。
 
-### 3. search_mode 权重验证与调优 ✅ 完成
+### 3. search_mode 权重验证与调优 ⬜ 待做（需用 LLM 模式重跑评测）
 
 **目标指标**：context_recall ↑
 **前置条件**：search_mode 功能已实现（✅），需要通过 RAGAS 评测验证效果并微调权重值
 
 #### 3.1 评测 search_mode 效果
-- ✅ 评测完成：balanced(0.909) > precise(0.852)
-- ✅ balanced 模式最优，但 MiMo 限速噪声大，差异不显著
+- ? 重跑评测：balanced vs precise（旧数据：0.909 vs 0.852，MiMo限速不可靠）
+- ? balanced最优待重跑确认
 
 #### 3.2 权重值微调
-- ⏸️ 保持当前权重，噪声环境下无法确认微调效果
-- ⏸️ 暂不调整，等 MiMo 限速缓解后再验证
+- ?? 保持当前权重，噪声环境下无法确认微调效果
+- ?? 暂不调整，等 MiMo 限速缓解后再验证
 
 **涉及文件**：`backend/agent/tool_implementations.py`、`backend/agent/prompts.py`
 
-### 4. Parent Document 扩展策略 ✅ 完成
+### 4. Parent Document 扩展策略 ⬜ 待做（需用 LLM 模式重跑评测）
 
 **目标指标**：faithfulness ↑
 **理由**：只需改截断参数和开关，不涉及索引重建
 
 #### 4.1 扩展 vs 不扩展对比
-- ✅ 关闭扩展后 recall 从 0.909 降到 0.833，扩展有效
-- ✅ 扩展提升了 recall，无过度引入无关内容的迹象
+- ? 重跑评测：扩展 vs 不扩展（旧数据：recall 0.909 vs 0.833）
+- ? 扩展有效性待重跑确认
 
 #### 4.2 截断长度实验
-- ⏸️ 当前 2000 截断已是最优平衡，暂不调整
-- ⏸️ 等 MiMo 限速缓解后再精细调参
+- ?? 当前 2000 截断已是最优平衡，暂不调整
+- ?? 等 MiMo 限速缓解后再精细调参
 
 **涉及文件**：`backend/agent/tool_implementations.py`、`backend/rag/parent_document.py`
 
@@ -112,8 +112,8 @@
 **当前配置**：target_size=4000（匹配 bge-m3 的 8k 上下文长度的一半）
 **暂缓理由**：当前 chunk size 已是合理选择，且有 Parent Document 扩展弥补上下文不足。重建全部索引成本高，收益不确定。
 
-- ⬜ 如 context_precision/context_recall 指标不理想，测试 target_size = 2000 vs 6000
-- ⬜ 每组需重建 BM25 + FAISS 索引
+- ? 如 context_precision/context_recall 指标不理想，测试 target_size = 2000 vs 6000
+- ? 每组需重建 BM25 + FAISS 索引
 
 **涉及文件**：`backend/data/chunker.py`
 
@@ -149,3 +149,37 @@
 - **API**：`https://token-plan-cn.xiaomimimo.com/v1`
 - **评测用例**：`backend/evaluation/test_cases.json`（12 条）
 - **NonLLM 模式**：`--no-llm` 可跳过 LLM 调用，用字符串匹配快速验证
+- **评测历史**：每轮评测自动追加到 `backend/evaluation/results/eval_history.jsonl`
+
+### 评测命令示例
+
+```bash
+cd D:\Agent\ARKNIGHTSAgent
+$env:PYTHONPATH="D:\Agent\ARKNIGHTSAgent"
+# 基线评测
+D:\anaconda3\python.exe backend/evaluation/rag_eval.py --with-answer --tag "基线"
+# Prompt 优化后
+D:\anaconda3\python.exe backend/evaluation/rag_eval.py --with-answer --tag "Task1-Prompt优化后"
+# 调参实验
+D:\anaconda3\python.exe backend/evaluation/rag_eval.py --with-answer --tag "top_n=5-候选15"
+```
+
+### eval_history.jsonl 格式说明
+
+每行一条 JSON 记录，包含以下字段：
+
+| 字段 | 说明 |
+|------|------|
+| `timestamp` | 评测时间 |
+| `tag` | 本轮标签（通过 `--tag` 传入） |
+| `num_cases` | 测试用例数 |
+| `nv_context_relevance` | context_precision 均值 |
+| `context_recall` | context_recall 均值 |
+| `faithfulness` | faithfulness 均值（仅 --with-answer） |
+| `answer_relevancy` | answer_relevancy 均值（仅 --with-answer） |
+| `mode` | 评测模式：no-llm / llm / with-answer |
+| `search_mode` | 检索模式：precise / semantic / balanced |
+| `top_k` | 检索返回数 |
+| `csv_file` | 本轮详细结果 CSV 文件名 |
+
+**使用方式**：每轮评测后从 `eval_history.jsonl` 末行取出数据，填入上方 Task.md 评测记录表。
