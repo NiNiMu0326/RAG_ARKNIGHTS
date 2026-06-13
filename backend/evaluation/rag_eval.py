@@ -109,11 +109,11 @@ async def generate_answer(question: str, contexts: List[str], model: str = "deep
         return ""
 
 
-async def retrieve_contexts(question: str, top_k: int = 5, search_mode: str = "balanced") -> List[str]:
+async def retrieve_contexts(question: str, top_k: int = 5, search_mode: str = "balanced", enable_parent_expansion: bool = True) -> List[str]:
     """\u8c03\u7528 RAG \u68c0\u7d22\u83b7\u53d6\u4e0a\u4e0b\u6587\u6587\u672c\u5217\u8868\u3002"""
     from backend.agent.tool_implementations import execute_rag_search
 
-    result = await execute_rag_search({"query": question, "top_k": top_k, "search_mode": search_mode})
+    result = await execute_rag_search({"query": question, "top_k": top_k, "search_mode": search_mode, "enable_parent_expansion": enable_parent_expansion})
 
     contexts = []
     for item in result:
@@ -199,7 +199,8 @@ def run_evaluation_with_llm(dataset, include_answer_metrics: bool = False):
 
 async def build_dataset(test_cases: List[Dict], top_k: int = 5, search_mode: str = "balanced",
                         use_reference_contexts: bool = False,
-                        with_answer: bool = False):
+                        with_answer: bool = False,
+                        enable_parent_expansion: bool = True):
     """\u6784\u5efa RAGAS \u8bc4\u4f30\u6570\u636e\u96c6\u3002
 
     RAGAS 0.4.x \u65e7\u7248\u63a5\u53e3\u5217\u540d:
@@ -373,6 +374,8 @@ async def main():
                         help="\u4f7f\u7528 NonLLM \u6307\u6807 (\u66f4\u5feb\u4f46\u7cbe\u5ea6\u8f83\u4f4e)")
     parser.add_argument("--with-answer", action="store_true",
                         help="\u751f\u6210\u56de\u7b54\u5e76\u8bc4\u4f30 faithfulness/answer_relevancy")
+    parser.add_argument("--no-parent-expansion", action="store_true",
+                        help="?? Parent Document ??????????")
     parser.add_argument("--search-mode", default="balanced", choices=["precise", "semantic", "balanced"], help="search_mode for RAG retrieval")
     parser.add_argument("--tag", default="", help="本轮评测标签，写入 eval_history.jsonl")
     parser.add_argument("--output-dir", default="backend/evaluation/results",
@@ -388,6 +391,7 @@ async def main():
         test_cases, top_k=args.top_k, search_mode=args.search_mode,
         use_reference_contexts=args.no_llm,
         with_answer=args.with_answer,
+        enable_parent_expansion=not args.no_parent_expansion,
     )
     if dataset is None:
         sys.exit(1)

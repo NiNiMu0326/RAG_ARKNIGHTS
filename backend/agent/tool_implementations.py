@@ -20,6 +20,7 @@ async def execute_rag_search(arguments: Dict[str, Any], session_id: str = "") ->
     """
     query = arguments.get("query", "")
     top_k = arguments.get("top_k", 8)
+    enable_parent_expansion = arguments.get("enable_parent_expansion", True)
     search_mode = arguments.get("search_mode", "balanced")
 
     # Map search_mode to vector_weight for RRF fusion
@@ -70,7 +71,7 @@ async def execute_rag_search(arguments: Dict[str, Any], session_id: str = "") ->
             content = doc.page_content
 
             # Expand operators/stories chunks to full parent doc
-            if chunk_id.startswith("operators_") or chunk_id.startswith("stories_"):
+            if enable_parent_expansion and (chunk_id.startswith("operators_") or chunk_id.startswith("stories_")):
                 chunk_data = {
                     "chunk_id": chunk_id,
                     "content": content,
