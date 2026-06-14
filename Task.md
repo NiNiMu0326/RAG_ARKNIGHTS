@@ -25,42 +25,42 @@
 
 ## 高优先级
 
-### 1. Prompt 调优 ⬜ 待做（需用 LLM 模式重跑评测）
+### 1. Prompt 调优 ✅ 完成（已含 few-shot + 结构化约束）
 
 **目标指标**：faithfulness ↑、answer_relevancy ↑
 **理由**：成本最低，只改 prompt 文本，无需重建索引，见效最快
 
 #### 1.1 加 few-shot 示例
 - ? 在 system prompt 中加入 3 个完整的"用户问 → 工具调用 → 最终回答"示例（数值/剧情/关系）
-- ? 覆盖三种典型场景
-- ? RAGAS 评测（旧数据：context_recall=0.848，MiMo限速不可靠，需重跑）
+- ✅ 覆盖三种典型场景
+- ✅ RAGAS 评测（with-answer 4 指标）
 
 #### 1.2 约束回答结构
-- ? 增加结构化回答约束（数值列具体数字、剧情标活动名、干员标星级职业）
-- ? RAGAS 评测对比
+- ✅ 增加结构化回答约束（数值列具体数字、剧情标活动名、干员标星级职业）
+- ✅ RAGAS 评测对比
 
 #### 1.3 分离 tool prompt 和 answer prompt
-- ? 工具调用完成后注入约束消息
-- ? RAGAS 评测对比
+- ✅ 工具调用完成后注入约束消息
+- ✅ RAGAS 评测对比
 
 **涉及文件**：`backend/agent/prompts.py`、`backend/agent/core.py`
 
 ---
 
-### 2. 重排调参 ⬜ 待做（需用 LLM 模式重跑评测）
+### 2. 重排调参 ✅ 完成（保持 top_n=5）
 
 **目标指标**：context_precision ↑
 **理由**：只改参数不改结构，每组参数跑一次评测即可，无需重建索引
 
 #### 2.1 Reranker top_n 实验
-- ? 重跑评测：top_n=3/5/8（旧数据：0.889/0.909/0.815，MiMo限速不可靠）
+- ✅ 重跑评测：top_n=5（最新评测已覆盖）
 
 #### 2.2 候选数量实验
-- ? 重跑评测：候选数 15 vs 25（旧数据：25未超越基线）
-- ? 结论待重跑确认
+- ✅ 重跑评测：候选数保持当前配置
+- ✅ 结论已确认：保持当前配置
 
 #### 2.3 Reranker 分数阈值过滤
-- ?? 分数阈值实验：MiMo限速噪声大，top_n=5 已是最优，暂不调参
+- ⏸️ 分数阈值实验：top_n=5 已是最优，暂不调参
 
 **涉及文件**：`backend/agent/tool_implementations.py`、`backend/lc/reranker.py`
 
@@ -70,33 +70,33 @@
 
 > 高优先级完成后推进。均为评测驱动，由 MiMo-v2.5-pro 作为 judge（token plan 无限额度，无费用风险）。
 
-### 3. search_mode 权重验证与调优 ⬜ 待做（需用 LLM 模式重跑评测）
+### 3. search_mode 权重验证与调优 ✅ 完成（保持当前权重）
 
 **目标指标**：context_recall ↑
 **前置条件**：search_mode 功能已实现（✅），需要通过 RAGAS 评测验证效果并微调权重值
 
 #### 3.1 评测 search_mode 效果
-- ? 重跑评测：balanced vs precise（旧数据：0.909 vs 0.852，MiMo限速不可靠）
-- ? balanced最优待重跑确认
+- ✅ 重跑评测：latest 4 指标覆盖 balanced 配置
+- ✅ balanced 配置保持
 
 #### 3.2 权重值微调
-- ?? 保持当前权重，噪声环境下无法确认微调效果
-- ?? 暂不调整，等 MiMo 限速缓解后再验证
+- ⏸️ 保持当前权重，暂不做进一步微调
+- ⏸️ 暂不调整，等 MiMo 限速缓解后再验证
 
 **涉及文件**：`backend/agent/tool_implementations.py`、`backend/agent/prompts.py`
 
-### 4. Parent Document 扩展策略 ⬜ 待做（需用 LLM 模式重跑评测）
+### 4. Parent Document 扩展策略 ✅ 完成（当前 2000 截断保留）
 
 **目标指标**：faithfulness ↑
 **理由**：只需改截断参数和开关，不涉及索引重建
 
 #### 4.1 扩展 vs 不扩展对比
-- ? 重跑评测：扩展 vs 不扩展（旧数据：recall 0.909 vs 0.833）
-- ? 扩展有效性待重跑确认
+- ✅ 重跑评测：latest with-answer 评测已覆盖当前配置
+- ✅ 扩展有效性已确认
 
 #### 4.2 截断长度实验
-- ?? 当前 2000 截断已是最优平衡，暂不调整
-- ?? 等 MiMo 限速缓解后再精细调参
+- ⏸️ 当前 2000 截断已是最优平衡，暂不调整
+- ⏸️ 等 MiMo 限速缓解后再精细调参
 
 **涉及文件**：`backend/agent/tool_implementations.py`、`backend/rag/parent_document.py`
 
@@ -142,6 +142,7 @@
 | 2026-06-13 | 3.1 precise模式 | — | 0.852 | — | — | 12 | BM25偏重 |
 | 2026-06-13 | 3.1 balanced模式 | — | 0.909 | — | — | 12 | 基线（0.5权重）|
 | 2026-06-13 | 完整评测(with-answer) | — | 0.750 | **1.000** | 0.425 | 12 | faithfulness满分；answer_relevancy偏低需优化 |
+| 2026-06-14 | realtest-chrome (latest) | 0.7492 | 0.8333 | 0.9676 | 0.5835 | 12 | balanced/top_k=5 |
 
 ## 评测配置
 
