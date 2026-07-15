@@ -82,12 +82,23 @@ app.add_middleware(
 async def log_requests(request: Request, call_next):
     start = time.time()
     req_id = id(request)
-    
+
     # Log request
     body_info = ""
     if request.method in ("POST", "PUT", "PATCH"):
-        # Read body for logging, but we need to store it for the endpoint
+        # Read body for logging, but restore it so the endpoint can also read it.
+        # In older Starlette versions, request.body() consumes the stream,
+        # so we must cache the body and restore the receive function.
         body = await request.body()
+
+        # Restore the body so downstream handlers can read it.
+        # Method 1: set _body (works in all Starlette versions, body() checks this first)
+        request._body = body
+        # Method 2: replace _receive (needed if body() doesn't cache on first call)
+        async def receive():
+            return {"type": "http.request", "body": body}
+        request._receive = receive
+
         try:
             body_json = json.loads(body)
             # Truncate long fields for readability
@@ -95,14 +106,14 @@ async def log_requests(request: Request, call_next):
             body_info = f" body={json.dumps(log_body, ensure_ascii=False)}"
         except Exception:
             body_info = f" body_length={len(body)}"
-    
+
     logger.info(f"[REQ #{req_id}] {request.method} {request.url.path}{body_info}")
-    
+
     response = await call_next(request)
-    
+
     elapsed = (time.time() - start) * 1000
     logger.info(f"[RES #{req_id}] {request.method} {request.url.path} -> {response.status_code} ({elapsed:.0f}ms)")
-    
+
     return response
 
 # AgenticRAG Session Manager (singleton)
@@ -653,92 +664,169 @@ def extract_names_from_markdown_table(content: str) -> List[str]:
     return sorted(list(names))
 
 
+# ===== Quick Questions static data caches =====
+# Pre-load these at first access to avoid repeated disk I/O on every refresh.
+_qq_operator_names: Optional[List[str]] = None
+_qq_story_names: Optional[List[str]] = None
+_qq_enemy_names: Optional[List[str]] = None
+_qq_alias_candidates: Optional[List[tuple]] = None  # [(standard_name, [aliases]), ...]
+_qq_graph_operators: Optional[List[str]] = None  # operator nodes from graph
+_qq_previous_labels: Optional[set] = None  # dedup: labels from previous batch
+
+
+def _load_qq_data():
+    """Lazy-load all static data needed for quick-question generation."""
+    global _qq_operator_names, _qq_story_names, _qq_enemy_names, _qq_alias_candidates, _qq_graph_operators
+
+    if _qq_operator_names is not None:
+        return  # already loaded
+
+    from backend.rag.alias_map import ALIAS_MAP
+    from collections import defaultdict
+
+    # Operator names (skill questions): from all_operators.json
+    operators_file = DATA_DIR / "all_operators.json"
+    if operators_file.exists():
+        with open(operators_file, 'r', encoding='utf-8') as f:
+            operators_data = json.load(f)
+        _qq_operator_names = [
+            op['干员名'] for op in operators_data
+            if '干员名' in op and op.get('星级', '6') not in ('1', '2')
+        ]
+    else:
+        _qq_operator_names = []
+
+    # Story names: from stories/*.md first heading
+    stories_dir = DATA_DIR / "stories"
+    _qq_story_names = []
+    if stories_dir.exists():
+        for f in sorted(stories_dir.glob("*.md")):
+            try:
+                first_line = f.read_text(encoding='utf-8').split('\n', 1)[0].strip()
+                if first_line.startswith('# '):
+                    _qq_story_names.append(first_line[2:].strip())
+            except Exception:
+                pass
+
+    # Enemy names: from all_enemies.json
+    enemies_file = DATA_DIR / "all_enemies.json"
+    if enemies_file.exists():
+        with open(enemies_file, 'r', encoding='utf-8') as f:
+            enemies_data = json.load(f)
+        _qq_enemy_names = [e['名称'] for e in enemies_data if '名称' in e]
+    else:
+        _qq_enemy_names = []
+
+    # Alias candidates: operators with 2+ aliases
+    name_to_aliases = defaultdict(set)
+    for alias, standard in ALIAS_MAP.items():
+        name_to_aliases[standard].add(alias)
+    _qq_alias_candidates = [
+        (name, sorted(aliases))
+        for name, aliases in name_to_aliases.items()
+        if len(aliases) >= 2
+    ]
+
+    # Graph operator nodes: operator-type nodes from entity_relations graph
+    _qq_graph_operators = []
+    try:
+        er = _load_entity_relations()
+        entities = er.get("entities", {})
+        if isinstance(entities, dict):
+            for entity_type, entity_list in entities.items():
+                if isinstance(entity_list, list):
+                    for e in entity_list:
+                        name = e.get("name", "") if isinstance(e, dict) else str(e)
+                        if name:
+                            _qq_graph_operators.append(name)
+    except Exception:
+        pass
+
+
+def _pick_excluding(candidates: list, label_suffix: str, exclude_labels: set, key=lambda x: x) -> Optional[str]:
+    """Pick a random item from candidates whose derived label is not in exclude_labels.
+    Tries up to 20 times, then falls back to random choice."""
+    import random
+    for _ in range(20):
+        chosen = random.choice(candidates)
+        label = f"{key(chosen)}{label_suffix}"
+        if label not in exclude_labels:
+            return chosen, label
+    # All excluded — just pick random
+    chosen = random.choice(candidates)
+    return chosen, f"{key(chosen)}{label_suffix}"
+
+
 @app.get("/quick-questions")
-async def get_quick_questions():
+async def get_quick_questions(refresh: bool = False):
     """生成5个快速问题，基于GraphRAG图数据和别名信息。"""
     import random
-    from backend.rag.alias_map import ALIAS_MAP
 
-    # Simple cache: return cached questions if within TTL
-    global _quick_questions_cache, _quick_questions_cache_time
+    global _quick_questions_cache, _quick_questions_cache_time, _qq_previous_labels
+
     now = time.time()
-    if _quick_questions_cache and now - _quick_questions_cache_time < _quick_questions_cache_ttl:
+    if not refresh and _quick_questions_cache and now - _quick_questions_cache_time < _quick_questions_cache_ttl:
         return {"questions": _quick_questions_cache}
+
+    # Lazy-load static data (cached after first call)
+    _load_qq_data()
+
+    # Build exclude set from previous batch (dedup)
+    exclude_labels = _qq_previous_labels or set()
 
     questions = []
 
-    # ===== 1. 关系问题：基于 GraphRAG 图中有连线的干员对 =====
+    # ===== 1. 关系问题：基于图中直接相连的干员对（O(deg) 替代 O(V+E) BFS） =====
     try:
-        from backend.rag.graphrag.query import get_graph_builder
-        graph_builder = get_graph_builder()
-        graph = graph_builder.graph
-
-        if graph and graph.number_of_nodes() > 0:
-            # 获取所有"干员"类型的节点
-            operator_nodes = [
-                n for n in graph.nodes()
-                if graph.nodes[n].get("type") == "干员" or n in (graph.nodes[n] for n in graph.nodes())
-            ]
-
-            # 尝试多次找到有连线的干员对
-            relation_pair = None
-            for _ in range(50):
-                if not operator_nodes:
-                    break
-                node_a = random.choice(operator_nodes)
-                # 获取所有与 node_a 在同一连通分量中的节点（无向图）
-                # 使用 BFS 找可达节点，记录距离
-                visited = {node_a: 0}
-                queue = [node_a]
-                while queue:
-                    current = queue.pop(0)
-                    for neighbor in graph.successors(current):
-                        if neighbor not in visited:
-                            visited[neighbor] = visited[current] + 1
-                            queue.append(neighbor)
-                    for neighbor in graph.predecessors(current):
-                        if neighbor not in visited:
-                            visited[neighbor] = visited[current] + 1
-                            queue.append(neighbor)
-
-                # 在可达的干员节点中选择（排除自身），限制3跳以内
-                reachable_operators = [
-                    (n, dist) for n, dist in visited.items()
-                    if n != node_a and n in operator_nodes and dist <= 3
-                ]
-
-                if not reachable_operators:
-                    continue
-
-                # 加权随机：距离越近概率越高 (权重 = 1/distance^2)
-                weights = [1.0 / (d * d) for _, d in reachable_operators]
-                total_w = sum(weights)
-                weights = [w / total_w for w in weights]
-
-                idx = random.choices(range(len(reachable_operators)), weights=weights, k=1)[0]
-                node_b, dist = reachable_operators[idx]
-                relation_pair = (node_a, node_b, dist)
-                break
-
-            if relation_pair:
-                a, b, dist = relation_pair
-                questions.append({
-                    "label": f"{a}/{b}关系",
-                    "question": f"{a}和{b}的关系",
-                    "type": "relation",
-                })
-            else:
-                # fallback: 随机两个干员
-                op_names = operator_nodes[:100] if operator_nodes else []
-                if len(op_names) >= 2:
-                    a, b = random.sample(op_names, 2)
+        op_nodes = _qq_graph_operators or []
+        if op_nodes:
+            relation_label = None
+            for _ in range(30):
+                node_a = random.choice(op_nodes)
+                # Use entity_relations to find directly connected pairs (fast)
+                er = _load_entity_relations()
+                relations = er.get("relations", [])
+                connected = set()
+                for r in relations:
+                    s = r.get("source", r.get("head", ""))
+                    t = r.get("target", r.get("tail", ""))
+                    if s == node_a and t in op_nodes:
+                        connected.add(t)
+                    elif t == node_a and s in op_nodes:
+                        connected.add(s)
+                # Also try graph neighbors if graph is available
+                try:
+                    from backend.rag.graphrag.query import get_graph_builder
+                    gb = get_graph_builder()
+                    if gb and gb.graph and node_a in gb.graph:
+                        for nb in set(list(gb.graph.successors(node_a)) + list(gb.graph.predecessors(node_a))):
+                            if nb in op_nodes:
+                                connected.add(nb)
+                except Exception:
+                    pass
+                if connected:
+                    node_b = random.choice(list(connected))
+                    relation_label = f"{node_a}/{node_b}关系"
+                    if relation_label not in exclude_labels:
+                        questions.append({
+                            "label": relation_label,
+                            "question": f"{node_a}和{node_b}的关系",
+                            "type": "relation",
+                        })
+                        exclude_labels.add(relation_label)
+                        break
+            if not questions:  # no relation found after all attempts
+                # Fallback: two random operators
+                if len(op_nodes) >= 2:
+                    a, b = random.sample(op_nodes, 2)
+                    label = f"{a}/{b}关系"
                     questions.append({
-                        "label": f"{a}/{b}关系",
+                        "label": label,
                         "question": f"{a}和{b}的关系",
                         "type": "relation",
                     })
+                    exclude_labels.add(label)
         else:
-            # no graph, use fallback
             questions.append({
                 "label": "银灰/初雪关系",
                 "question": "银灰和初雪的关系",
@@ -752,102 +840,89 @@ async def get_quick_questions():
             "type": "relation",
         })
 
-    # ===== 2. 技能问题：随机干员 =====
-    try:
-        operators_file = DATA_DIR / "all_operators.json"
-        if operators_file.exists():
-            with open(operators_file, 'r', encoding='utf-8') as f:
-                operators_data = json.load(f)
-            op_names = [op['干员名'] for op in operators_data if '干员名' in op and op.get('星级', '6') not in ('1', '2')]
-            if op_names:
-                chosen = random.choice(op_names)
-                questions.append({
-                    "label": f"{chosen}技能",
-                    "question": f"{chosen}的技能是什么",
-                    "type": "skill",
-                })
-    except Exception:
+    # ===== 2. 技能问题：随机干员（内存中的预加载数据） =====
+    if _qq_operator_names:
+        chosen, label = _pick_excluding(_qq_operator_names, "技能", exclude_labels)
+        questions.append({
+            "label": label,
+            "question": f"{chosen}的技能是什么",
+            "type": "skill",
+        })
+        exclude_labels.add(label)
+    else:
         questions.append({
             "label": "银灰技能",
             "question": "银灰的技能是什么",
             "type": "skill",
         })
 
-    # ===== 3. 故事问题：从 stories 文件夹获取 =====
-    try:
-        stories_dir = DATA_DIR / "stories"
-        if stories_dir.exists():
-            story_names = []
-            for f in stories_dir.glob("*.md"):
-                with open(f, 'r', encoding='utf-8') as fh:
-                    first_line = fh.readline().strip()
-                    if first_line.startswith('# '):
-                        story_names.append(first_line[2:].strip())
-            if story_names:
-                chosen = random.choice(story_names)
-                questions.append({
-                    "label": f"{chosen}故事",
-                    "question": f"{chosen}的故事内容",
-                    "type": "story",
-                })
-    except Exception:
+    # ===== 3. 故事问题：随机故事 =====
+    if _qq_story_names:
+        chosen, label = _pick_excluding(_qq_story_names, "故事", exclude_labels)
+        questions.append({
+            "label": label,
+            "question": f"{chosen}的故事内容",
+            "type": "story",
+        })
+        exclude_labels.add(label)
+    else:
         questions.append({
             "label": "乌萨斯的孩子们故事",
             "question": "乌萨斯的孩子们的故事内容",
             "type": "story",
         })
 
-    # ===== 4. 敌人问题：从 all_enemies.json 获取 =====
-    try:
-        enemies_file = DATA_DIR / "all_enemies.json"
-        if enemies_file.exists():
-            with open(enemies_file, 'r', encoding='utf-8') as f:
-                enemies_data = json.load(f)
-            enemy_names = [e['名称'] for e in enemies_data if '名称' in e]
-            if enemy_names:
-                chosen = random.choice(enemy_names)
-                questions.append({
-                    "label": f"{chosen}敌人",
-                    "question": f"{chosen}的属性和能力是什么",
-                    "type": "enemy",
-                })
-    except Exception:
+    # ===== 4. 敌人问题：随机敌人 =====
+    if _qq_enemy_names:
+        chosen, label = _pick_excluding(_qq_enemy_names, "敌人", exclude_labels)
+        questions.append({
+            "label": label,
+            "question": f"{chosen}的属性和能力是什么",
+            "type": "enemy",
+        })
+        exclude_labels.add(label)
+    else:
         questions.append({
             "label": "源石虫敌人",
             "question": "源石虫的属性和能力是什么",
             "type": "enemy",
         })
 
-    # ===== 5. 别名问题：只选有别名（其他名称）的干员 =====
-    try:
-        # 从 ALIAS_MAP 反转：标准名 → [别名列表]，只保留有2个以上别名的
-        from collections import defaultdict
-        name_to_aliases = defaultdict(set)
-        for alias, standard in ALIAS_MAP.items():
-            name_to_aliases[standard].add(alias)
-        # 只保留有"其他名称"的干员（别名数 >= 2，即除标准名外还有别的叫法）
-        operators_with_aliases = [
-            name for name, aliases in name_to_aliases.items()
-            if len(aliases) >= 2
-        ]
-        if operators_with_aliases:
-            chosen = random.choice(operators_with_aliases)
-            aliases = sorted(name_to_aliases[chosen])
+    # ===== 5. 别名问题：有多个别名的干员 =====
+    if _qq_alias_candidates:
+        # Pick excluding by the operator name part of the label
+        for _ in range(20):
+            chosen_name, aliases = random.choice(_qq_alias_candidates)
+            label = f"{chosen_name}别名"
+            if label not in exclude_labels:
+                questions.append({
+                    "label": label,
+                    "question": f"{chosen_name}的其他名称有哪些",
+                    "type": "alias",
+                })
+                exclude_labels.add(label)
+                break
+        else:
+            # All excluded, just pick random
+            chosen_name, aliases = random.choice(_qq_alias_candidates)
+            label = f"{chosen_name}别名"
             questions.append({
-                "label": f"{chosen}别名",
-                "question": f"{chosen}的其他名称有哪些",
+                "label": label,
+                "question": f"{chosen_name}的其他名称有哪些",
                 "type": "alias",
             })
-    except Exception:
+            exclude_labels.add(label)
+    else:
         questions.append({
             "label": "银灰别名",
             "question": "银灰的其他名称有哪些",
             "type": "alias",
         })
 
-    # Update cache
+    # Update caches
     _quick_questions_cache = questions
     _quick_questions_cache_time = time.time()
+    _qq_previous_labels = {q["label"] for q in questions}
 
     return {"questions": questions}
 

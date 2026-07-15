@@ -173,8 +173,9 @@ export const api = {
     return response.json()
   },
 
-  async getQuickQuestions() {
-    const response = await fetch(`${API_BASE}/quick-questions`)
+  async getQuickQuestions(refresh = false) {
+    const url = refresh ? `${API_BASE}/quick-questions?refresh=true` : `${API_BASE}/quick-questions`
+    const response = await fetch(url)
     if (!response.ok) {
       const err = await response.json()
       throw new Error(err.detail || 'Failed to get quick questions')

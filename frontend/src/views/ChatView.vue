@@ -699,13 +699,13 @@ function getToolDisplayName(name) {
   }
 }
 
-async function loadQuickQuestionsData() {
+async function loadQuickQuestionsData(refresh = false) {
   if (quickQuestionsStore.isLoading) return;
 
   quickQuestionsStore.setLoading(true);
   try {
     console.log('正在从后端加载快速问题...');
-    const res = await api.getQuickQuestions();
+    const res = await api.getQuickQuestions(refresh);
     const questions = res.questions || [];
     if (questions.length > 0) {
       quickQuestionsStore.setQuickActions(questions);
@@ -741,7 +741,7 @@ async function refreshQuickActions() {
       refreshIcon.classList.remove('rotating');
     }, 600);
   }
-  await loadQuickQuestionsData()
+  await loadQuickQuestionsData(true)
 }
 
 let _scrollRafId = null

@@ -27,6 +27,7 @@
               <div class="form-group" style="position: relative;">
                 <input type="text" class="input" v-model="chunkSearch" placeholder="搜索文档..." @input="debouncedSearch" @focus="onSearchFocus" @blur="onSearchBlur">
                 <div class="chunk-search-results" v-if="searchFocused || searchResults.length" :class="{ active: searchFocused || searchResults.length }">
+                  <div v-if="loadingChunks" class="chunk-search-item" style="color: var(--text-dim);">加载中...</div>
                   <div v-for="r in (searchResults.length ? searchResults : chunks)" :key="r.filename" class="chunk-search-item" @mousedown.prevent="selectChunk(r)">
                     {{ r.name }}
                   </div>
@@ -36,20 +37,23 @@
           </div>
           <div class="chunk-preview">
             <div class="chunk-preview-header">
-              <span class="chunk-preview-title">{{ selectedChunk?.name || 'Select a chunk' }}</span>
-              <div class="chunk-preview-stats" v-if="selectedChunk">
+              <span class="chunk-preview-title">{{ loadingChunks ? '加载中...' : (selectedChunk?.name || '选择一个文档') }}</span>
+              <div class="chunk-preview-stats" v-if="selectedChunk && !loadingChunks">
                 <span>{{ selectedChunk.char_count }} 字符</span>
                 <span>{{ selectedChunk.lines }} 行</span>
                 <span>{{ selectedChunk.tokens }} tokens</span>
               </div>
-              <div class="chunk-nav-inline" v-if="chunks.length">
+              <div class="chunk-nav-inline" v-if="chunks.length && !loadingChunks">
                 <button class="btn btn-small" @click="navigateChunk(-1)">&lt;</button>
                 <input type="number" class="chunk-nav-input" v-model="chunkNavInput" min="1" :max="chunks.length" @keypress.enter="jumpToChunk">
                 <span class="chunk-nav-info">/ {{ chunks.length }}</span>
                 <button class="btn btn-small" @click="navigateChunk(1)">&gt;</button>
               </div>
+              <div class="chunk-nav-inline" v-else-if="loadingChunks">
+                <span class="chunk-nav-info">加载中...</span>
+              </div>
             </div>
-            <div class="chunk-preview-content">{{ selectedChunkContent || 'Content will be displayed here...' }}</div>
+            <div class="chunk-preview-content">{{ loadingContent ? '加载中...' : (selectedChunkContent || '选择一个文档查看内容') }}</div>
           </div>
         </div>
       </div>
@@ -268,23 +272,33 @@ watch(activeTab, (tab) => {
   }
 })
 
+const loadingContent = ref(false)
+
 async function loadChunks() {
   loadingChunks.value = true
   chunkSearch.value = ''
   searchResults.value = []
-  selectedChunk.value = null
-  selectedChunkContent.value = ''
-  chunks.value = []
   try {
-    chunks.value = await api.getChunks(chunkCollection.value)
-    if (chunks.value.length > 0) {
-      selectChunk(chunks.value[0])
+    const newChunks = await api.getChunks(chunkCollection.value)
+    // 新数据到了才替换，避免中间空白
+    chunks.value = newChunks
+    if (newChunks.length > 0) {
+      // 选中第一个，内容在后台异步加载
+      selectChunk(newChunks[0])
+    } else {
+      selectedChunk.value = null
+      selectedChunkContent.value = ''
     }
     if (searchFocused.value && !chunkSearch.value.trim()) {
-      searchResults.value = chunks.value
+      searchResults.value = newChunks
     }
   } catch (e) {
-    chunks.value = []
+    // 加载失败不清空已有数据
+    if (chunks.value.length === 0) {
+      chunks.value = []
+      selectedChunk.value = null
+      selectedChunkContent.value = ''
+    }
   }
   loadingChunks.value = false
 }
@@ -294,12 +308,14 @@ async function selectChunk(chunk) {
   selectedChunk.value = chunk
   chunkSearch.value = ''
   searchResults.value = []
+  loadingContent.value = true
   try {
     const result = await api.getChunk(chunkCollection.value, chunk.filename)
     selectedChunkContent.value = result.content
   } catch (e) {
     selectedChunkContent.value = '加载失败'
   }
+  loadingContent.value = false
   const idx = chunks.value.findIndex(c => c.filename === chunk.filename)
   if (idx >= 0) chunkNavInput.value = idx + 1
 }
