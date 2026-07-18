@@ -415,8 +415,9 @@ const pagedRelations = computed(() => {
 })
 
 const pageMaxCount = computed(() => {
-  if (pagedRelations.value.length === 0) return 0
-  return pagedRelations.value[0].count
+  // 始终使用全局最大值（第一页第一个）作为分母
+  if (allRelationTypes.value.length === 0) return 0
+  return allRelationTypes.value[0].count
 })
 
 // Relation detail modal
