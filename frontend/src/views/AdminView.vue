@@ -409,8 +409,9 @@ const totalRelationPages = computed(() => Math.ceil(allRelationTypes.value.lengt
 const pagedRelations = computed(() => {
   const start = (relationPage.value - 1) * 5
   const items = allRelationTypes.value.slice(start, start + 5)
-  const pageMax = items.length > 0 ? items[0].count : 0
-  return items.map(item => ({ ...item, maxCount: pageMax }))
+  // 始终使用全局最大值（第一页第一个）作为分母，保证各页柱状图比例一致
+  const globalMax = allRelationTypes.value.length > 0 ? allRelationTypes.value[0].count : 0
+  return items.map(item => ({ ...item, maxCount: globalMax }))
 })
 
 const pageMaxCount = computed(() => {

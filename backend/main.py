@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
+from starlette.types import ASGIApp, Scope, Receive, Send, Message
 import uvicorn
 
 from backend import config  # 必须在 auth 之前导入，以加载 .env
@@ -77,44 +78,61 @@ app.add_middleware(
 )
 
 
-# Request logging middleware
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    start = time.time()
-    req_id = id(request)
+# Request logging middleware (raw ASGI to avoid BaseHTTPMiddleware + SSE streaming conflict)
+class RequestLoggingMiddleware:
+    """Raw ASGI request/response logging middleware.
 
-    # Log request
-    body_info = ""
-    if request.method in ("POST", "PUT", "PATCH"):
-        # Read body for logging, but restore it so the endpoint can also read it.
-        # In older Starlette versions, request.body() consumes the stream,
-        # so we must cache the body and restore the receive function.
-        body = await request.body()
+    Uses pure ASGI (not BaseHTTPMiddleware) to avoid the
+    "RuntimeError: Unexpected message received" error
+    when streaming responses (SSE) are used.
+    """
 
-        # Restore the body so downstream handlers can read it.
-        # Method 1: set _body (works in all Starlette versions, body() checks this first)
-        request._body = body
-        # Method 2: replace _receive (needed if body() doesn't cache on first call)
-        async def receive():
-            return {"type": "http.request", "body": body}
-        request._receive = receive
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
 
-        try:
-            body_json = json.loads(body)
-            # Truncate long fields for readability
-            log_body = {k: (v if len(str(v)) < 200 else str(v)[:200] + "...") for k, v in body_json.items()}
-            body_info = f" body={json.dumps(log_body, ensure_ascii=False)}"
-        except Exception:
-            body_info = f" body_length={len(body)}"
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-    logger.info(f"[REQ #{req_id}] {request.method} {request.url.path}{body_info}")
+        start = time.time()
+        method = scope.get("method", "")
+        path = scope.get("path", "")
+        req_id = id(scope)
 
-    response = await call_next(request)
+        body_chunks: list[bytes] = []
 
-    elapsed = (time.time() - start) * 1000
-    logger.info(f"[RES #{req_id}] {request.method} {request.url.path} -> {response.status_code} ({elapsed:.0f}ms)")
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                # Build body info from collected chunks
+                body_info = ""
+                if body_chunks and method in ("POST", "PUT", "PATCH"):
+                    body = b"".join(body_chunks)
+                    try:
+                        body_json = json.loads(body)
+                        log_body = {k: (v if len(str(v)) < 200 else str(v)[:200] + "...") for k, v in body_json.items()}
+                        body_info = f" body={json.dumps(log_body, ensure_ascii=False)}"
+                    except Exception:
+                        body_info = f" body_length={len(body)}"
 
-    return response
+                logger.info(f"[REQ #{req_id}] {method} {path}{body_info}")
+
+                status_code = message.get("status", 0)
+                elapsed = (time.time() - start) * 1000
+                logger.info(f"[RES #{req_id}] {method} {path} -> {status_code} ({elapsed:.0f}ms)")
+
+            await send(message)
+
+        async def receive_wrapper() -> Message:
+            message = await receive()
+            if message["type"] == "http.request":
+                body_chunks.append(message.get("body", b""))
+            return message
+
+        await self.app(scope, receive_wrapper, send_wrapper)
+
+
+app.add_middleware(RequestLoggingMiddleware)
 
 # AgenticRAG Session Manager (singleton)
 _session_manager = SessionManager(max_sessions=1000, ttl_seconds=3600)
