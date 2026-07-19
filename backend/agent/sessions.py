@@ -176,6 +176,7 @@ class SessionManager:
             age = time.time() - session.created_at
             if age > self._ttl:
                 del self._sessions[session_id]
+                self._evict_web_search_seen(session_id)
                 logger.warning(f"[SESSION] Expired: {session_id} (age={age:.0f}s, ttl={self._ttl}s)")
                 return None
 

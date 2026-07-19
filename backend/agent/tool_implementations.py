@@ -1,4 +1,4 @@
-﻿"""
+"""
 Tool implementations for AgenticRAG.
 Each function takes a dict of arguments and returns a result.
 """
@@ -210,6 +210,7 @@ async def execute_web_search(arguments: Dict[str, Any], session_id: str = "") ->
                 "title": r.get("title", ""),
                 "url": url,
                 "content": content[:500],
+                "source_id": "web",  # Add this for source citation
             })
 
         return deduped if deduped else [{"message": "未找到相关网络搜索结果（其余结果已在之前返回）", "query": query}]
@@ -223,8 +224,9 @@ async def execute_web_search(arguments: Dict[str, Any], session_id: str = "") ->
 
 # ===== Lazy-loaded singletons =====
 
+import threading
 _bm25_indexes = None
-_bm25_lock = None
+_bm25_lock = threading.Lock()
 
 # Web search dedup: session_id -> set of seen URLs/content keys
 _web_search_seen: Dict[str, set] = {}
@@ -248,10 +250,7 @@ def _cleanup_web_search_seen() -> None:
 
 def _get_bm25_indexes():
     """Lazy-load BM25 indexes."""
-    global _bm25_indexes, _bm25_lock
-    import threading
-    if _bm25_lock is None:
-        _bm25_lock = threading.Lock()
+    global _bm25_indexes
 
     if _bm25_indexes is not None:
         return _bm25_indexes

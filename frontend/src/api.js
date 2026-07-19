@@ -173,6 +173,11 @@ export const api = {
     return response.json()
   },
 
+  async getTracesStatus() {
+    const response = await fetch(`${API_BASE}/agent/traces`)
+    return response.json()
+  },
+
   async getQuickQuestions(refresh = false) {
     const url = refresh ? `${API_BASE}/quick-questions?refresh=true` : `${API_BASE}/quick-questions`
     const response = await fetch(url)
@@ -271,7 +276,7 @@ export const api = {
 
         try {
           const event = JSON.parse(jsonStr)
-          _dispatchSSEEvent(event, { onThinkingStart, onToolCallsStart, onToolExecuting, onToolCallResult, onThinkingDelta, onAnswerDelta, onAnswerDone, onError })
+          _dispatchSSEEvent(event, { onThinkingStart, onThinkingDone, onToolCallsStart, onToolExecuting, onToolCallResult, onThinkingDelta, onAnswerDelta, onAnswerDone, onError })
         } catch (e) {
           console.warn('Failed to parse SSE event:', jsonStr, e)
         }

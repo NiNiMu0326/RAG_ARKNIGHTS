@@ -10,7 +10,6 @@ import asyncio
 from typing import List, Dict, Any, Optional
 
 from backend import config
-from backend.api.base import create_http_session
 
 # Event types yielded by chat_with_tools_stream
 STREAM_EVENT_THINKING_DELTA = "thinking_delta"
@@ -143,9 +142,6 @@ class DeepSeekClient:
         self.base_url = base_url or config.DEEPSEEK_BASE_URL
         self.model = model or config.DEEPSEEK_LLM_MODEL
         self.disable_thinking = False  # Set True for models where deep thinking is overkill
-
-        # Create session with connection pooling and retry logic
-        self._session = create_http_session()
 
     async def chat_with_tools_stream(
         self,

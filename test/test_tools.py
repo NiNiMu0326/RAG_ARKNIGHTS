@@ -22,9 +22,9 @@ from backend.agent.tools import (
 class TestToolSchemas:
     """Verify the structure and content of tool schema definitions."""
 
-    def test_three_tools_registered(self):
-        """There should be exactly 3 tool schemas."""
-        assert len(TOOL_SCHEMAS) == 3
+    def test_tools_registered(self):
+        """There should be exactly 4 tool schemas (rag, graphrag, web, structured)."""
+        assert len(TOOL_SCHEMAS) == 4
 
     def test_rag_search_schema(self):
         """arknights_rag_search schema should have correct structure."""

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Agent core loop for AgenticRAG.
 Implements the native parallel Function Calling loop with asyncio.gather.
 """
@@ -16,6 +16,7 @@ from backend.agent.tools import ToolRegistry, get_tool_registry
 from backend.api.deepseek import ToolCall, STREAM_EVENT_THINKING_DELTA, STREAM_EVENT_CONTENT_DELTA, STREAM_EVENT_TOOL_CALLS, STREAM_EVENT_DONE
 from backend.api.llm_factory import get_llm_client, get_model_info, DEFAULT_MODEL
 from backend import config
+from backend.observability.tracing import AgentTrace, get_current_trace, get_langfuse_client
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +280,9 @@ async def agent_loop(
     if session is None:
         # Session expired — create new one and notify frontend via error event
         # (main.py will also set X-New-Session-Id header)
+        # Clean up stale web search dedup state for the expired session
+        from backend.agent.tool_implementations import clear_web_search_seen
+        clear_web_search_seen(session_id)
         session = await session_manager.create_session()
         logger.warning(f"[SESSION] Session '{session_id}' expired, created new: {session.session_id}")
 
@@ -292,6 +296,9 @@ async def agent_loop(
 
     messages = build_messages(session)
     logger.info(f"[SESSION] session={session_id} user_message={user_message[:100]}")
+
+    # Initialize LangFuse trace if enabled
+    trace = AgentTrace(session_id, user_message, model_id or DEFAULT_MODEL)
 
     loop_start = time.time()
 
@@ -313,10 +320,12 @@ async def agent_loop(
         # Detect loop
         if detect_loop(session.messages):
             logger.warning(f"[LOOP] Loop detected in session {session_id}")
+            trace.end(error="loop_detected", total_rounds=round_num)
             yield format_error("我在查找信息时陷入了循环，无法完成回答。请尝试更具体的问题。")
             return
 
         # Call LLM with tools (streaming)
+        llm_start = time.time()
         try:
             logger.info(f"[LLM CALL] Round {round_num}: Sending {len(messages)} messages to {model_info['display_name']}")
             yield format_thinking_start(round_num, timestamp_ms=time.time() * 1000)
@@ -359,8 +368,19 @@ async def agent_loop(
                     final_reasoning = event.get("reasoning_content", "")
 
             logger.info(f"[LLM RESPONSE] Round {round_num}: content_len={len(final_content)} tool_calls={len(tool_calls) if tool_calls else 0}")
+
+            # Record LLM generation in LangFuse trace
+            llm_latency = (time.time() - llm_start) * 1000
+            trace.add_llm_generation(
+                round_num=round_num,
+                messages_count=len(messages),
+                tool_calls_count=len(tool_calls) if tool_calls else 0,
+                latency_ms=llm_latency,
+                model=model_id,
+            )
         except Exception as e:
             logger.error(f"[LLM ERROR] {model_info['display_name']} API call failed: {e}", exc_info=True)
+            trace.end(error=str(e), total_rounds=round_num)
             yield format_error(f"AI 服务暂时不可用: {str(e)}")
             return
 
@@ -384,6 +404,11 @@ async def agent_loop(
 
             total_ms = round((time.time() - loop_start) * 1000)
             logger.info(f"[ANSWER] session={session_id} rounds={round_num - 1} total_time={total_ms}ms content_len={len(clean_content)} final_content_len={len(final_content)}")
+            trace.end(
+                total_rounds=round_num - 1,
+                total_time_ms=total_ms,
+                answer_length=len(clean_content),
+            )
             yield format_answer_done(clean_content, metrics={
                 "total_time_ms": total_ms,
                 "num_tool_rounds": round_num - 1,
@@ -437,14 +462,26 @@ async def agent_loop(
             logger.info(f"[TOOL RESULT] {tc.name} ({elapsed_ms:.0f}ms): {result_summary}")
             yield format_tool_call_result(tc.id, result, time_ms=elapsed_ms, tool_name=tc.name)
 
-        # Inject grounding constraint after tool results
-        session.add_message("user", (
-            "基于以上检索结果回答用户问题。要求：只使用检索结果中的信息，不要编造检索结果中没有的信息。"
-        ))
+            # Record tool execution in LangFuse trace
+            try:
+                args = json.loads(tc.arguments)
+            except Exception:
+                args = {}
+            trace.add_tool_span(
+                tool_name=tc.name,
+                round_num=round_num,
+                args=args,
+                result_summary=_summarize_tool_result(result),
+                latency_ms=elapsed_ms,
+            )
 
-        # Rebuild messages for next round
+        # Rebuild messages for next round.
+        # Inject grounding constraint as a system-level instruction (not stored in
+        # session) so the LLM treats it as a directive, not as user input.
         messages = build_messages(session)
+        messages.insert(1, {"role": "system", "content": "基于以上检索结果回答用户问题。要求：只使用检索结果中的信息，不要编造检索结果中没有的信息。"})
 
     # Exceeded max rounds
     logger.warning(f"Max rounds ({max_rounds}) exceeded in session {session_id}")
+    trace.end(error="max_rounds_exceeded", total_rounds=max_rounds)
     yield format_error("我无法在有限的步骤内完成回答，请尝试更具体的问题。")
