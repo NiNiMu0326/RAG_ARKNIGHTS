@@ -657,6 +657,16 @@ async def get_agent_models():
     }
 
 
+@app.get("/agent/traces")
+async def get_agent_traces():
+    """Get LangFuse observability status and link."""
+    return {
+        "enabled": config.LANGFUSE_ENABLED,
+        "host": config.LANGFUSE_HOST if config.LANGFUSE_ENABLED else "",
+        "message": "LangFuse 已配置，请访问 LangFuse 控制台查看完整 Trace" if config.LANGFUSE_ENABLED else "LangFuse 未配置，请在 .env 中设置 LANGFUSE_PUBLIC_KEY 和 LANGFUSE_SECRET_KEY",
+    }
+
+
 # ============== Data Endpoints ==============
 
 def extract_names_from_markdown_table(content: str) -> List[str]:

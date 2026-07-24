@@ -82,6 +82,24 @@ TOOL_SCHEMAS = [
                 "additionalProperties": False
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "arknights_structured_query",
+            "description": "使用 SQL 精确查询干员/敌人的结构化数值数据。适用于需要数值比较（攻击力>700）、排序（按防御排序）、统计（计数、平均值）等精确查询。表结构：operators(干员: name/rarity/class/branch/hp_elite2/atk_elite2/def_elite2/mres_elite2/...), enemies(敌人: name/category/rank/hp/atk/def/mres/...)。字符串值用单引号括起来。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {
+                        "type": "string",
+                        "description": "SQL SELECT 查询语句。表名: operators（干员）, enemies（敌人）。operators 表关键列: name(干员名), rarity(星级1-6), class(职业), branch(分支), hp_elite2(生命), atk_elite2(攻击), def_elite2(防御), mres_elite2(法抗)。enemies 表关键列: name(名称), rank(地位级别:普通/精英/领袖), category(种类), hp(生命), atk(攻击), def(防御), mres(法抗)。例: SELECT name, rarity, atk_elite2 FROM operators WHERE class='近卫' AND atk_elite2 > 700 ORDER BY atk_elite2 DESC LIMIT 10"
+                    }
+                },
+                "required": ["sql"],
+                "additionalProperties": False
+            }
+        }
     }
 ]
 
@@ -133,6 +151,8 @@ def _register_default_tools(registry: ToolRegistry):
         execute_graphrag_search,
         execute_web_search,
     )
+    from backend.agent.structured_query import execute_structured_query
     registry.register("arknights_rag_search", execute_rag_search)
     registry.register("arknights_graphrag_search", execute_graphrag_search)
     registry.register("web_search", execute_web_search)
+    registry.register("arknights_structured_query", execute_structured_query)

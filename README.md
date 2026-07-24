@@ -5,7 +5,7 @@
 ## 功能特性
 
 - **AI Agent 自主决策**：LLM 通过 Function Calling 自主选择工具、并行执行、判断信息充足性，最多 15 轮工具调用
-- **多 LLM 模型支持**：DeepSeek-V4-Flash、MiniMax-M2.7，通过 llm\_factory 统一调度
+- **多 LLM 模型支持**：通过 llm\_factory 统一调度，当前接入 DeepSeek-V4-Flash，可扩展更多模型
 - **知识库检索**：FAISS 向量 + BM25 关键词混合检索 → RRF 融合 → Cross-Encoder 重排 → Parent Document 扩展
 - **知识图谱查询（GraphRAG）**：NetworkX 有向图，支持单实体邻居查询和双实体最短路径查找
 - **网络搜索**：Tavily API + DuckDuckGo 兜底，补充外部实时信息
@@ -45,7 +45,6 @@ cp .env.example .env
 
 - `DEEPSEEK_API_KEY_2` - DeepSeek 官方模型
 - `TAVILY_API_KEY` - 网络搜索（不填则使用 DuckDuckGo 兜底）
-- `MINIMAX_API_KEY` - MiniMax 模型
 
 ### 3. 前端
 
@@ -114,7 +113,8 @@ Agent 自主循环：每轮 LLM 返回工具调用时并行执行，结果加入
 │   │   ├── deepseek.py          # OpenAI 兼容客户端（Chat + FC + 流式）
 │   │   ├── llm_factory.py       # 多 Provider LLM 工厂
 │   │   ├── siliconflow.py       # SiliconFlow API（嵌入 + 重排）
-│   │   └── web_search.py        # 网络搜索（Tavily + DuckDuckGo）
+│   │   ├── web_search.py        # 网络搜索（Tavily + DuckDuckGo）
+│   │   └── base.py              # 公共 HTTP 客户端工具（重试 + 连接池）
 │   ├── rag/                     # RAG 底层基础设施
 │   │   ├── retrievers.py        # 多通道检索（FAISS + BM25 + RRF），5h 缓存
 │   │   ├── parent_document.py   # Parent Document 扩展（LRU 缓存）
@@ -155,8 +155,7 @@ Agent 自主循环：每轮 LLM 返回工具调用时并行执行，结果加入
 ├── data/                        # 原始数据集（JSON/Markdown）
 ├── chunks/                      # 文本切块输出
 ├── faiss_index/                 # FAISS 向量索引持久化
-├── Scripts/                     # 辅助脚本
-└── tests/
+├── Scripts/                     # 辅助脚本（爬虫、数据同步等）
 ```
 
 ## API 端点
@@ -171,6 +170,7 @@ Agent 自主循环：每轮 LLM 返回工具调用时并行执行，结果加入
 | DELETE | `/agent/session/{id}`          | 删除会话           |
 | GET    | `/agent/models`                | 可用模型列表         |
 | GET    | `/agent/stats`                 | 会话统计           |
+| GET    | `/agent/debug/trace`           | Agent 工具调用追踪     |
 
 ### 认证
 
@@ -199,6 +199,7 @@ Agent 自主循环：每轮 LLM 返回工具调用时并行执行，结果加入
 | GET | `/status`              | 配置状态   |
 | GET | `/stats`               | 系统统计   |
 | GET | `/chunks/{collection}` | 切块列表   |
+| GET | `/chunks/{collection}/{id}` | 单个切块详情 |
 | GET | `/knowledge-graph`     | 知识图谱数据 |
 | GET | `/operators`           | 干员列表   |
 | GET | `/characters`          | 角色列表   |
@@ -210,7 +211,7 @@ Agent 自主循环：每轮 LLM 返回工具调用时并行执行，结果加入
 | 组件        | 技术                                                      |
 | --------- | ------------------------------------------------------- |
 | 后端框架      | FastAPI + Uvicorn                                       |
-| Agent LLM | DeepSeek-V4-Flash / MiniMax-M2.7（通过 llm\_factory 统一调度） |
+| Agent LLM | DeepSeek-V4-Flash（通过 llm\_factory 统一调度） |
 | 向量数据库     | FAISS                                                   |
 | 嵌入模型      | BAAI/bge-m3（SiliconFlow）                                |
 | 重排模型      | BAAI/bge-reranker-v2-m3（SiliconFlow）                    |
@@ -245,5 +246,29 @@ Agent 流式对话使用以下 SSE 事件：
 | `answer_delta`     | 回答增量内容（流式）  |
 | `answer_done`      | 回答完成        |
 | `error`            | 错误信息        |
+
+## 数据来源
+
+本项目使用的明日方舟领域数据包括：
+
+| 数据集 | 内容 | 来源 |
+|--------|------|------|
+| 干员数据 | 属性、技能、天赋、档案等 | PRTS Wiki 爬取 |
+| 敌人数据 | 敌人名称、属性、能力描述 | PRTS Wiki 爬取 |
+| 剧情故事 | 活动剧情、干员档案文本 | 游戏内文本提取 |
+| 游戏知识 | 玩法机制、干员外号、游戏梗、敌人外号等 | Agent WebSearch 互联网收集整理 |
+| 实体关系 | 干员/组织/地点/事件之间的关系 | 从干员档案和剧情中手工提取 |
+
+> 注意：`data/`、`chunks/`、`faiss_index/` 目录不在 Git 仓库中。提交时请附带这三个目录的 zip 包，或按上方"构建索引"步骤重新生成。
+
+## 复现示例
+
+以下问题可用于验证系统功能，详见项目报告及答辩PPT：
+
+1. **干员属性查询**："银灰的攻击力是多少？" → RAG precise 模式
+2. **角色关系推理**："特蕾西娅和阿米娅是什么关系？" → 知识图谱路径查询
+3. **剧情内容检索**："乌萨斯的孩子们讲了什么故事？" → RAG semantic 模式
+4. **并行工具调用**："阿米娅是什么种族，她和博士什么关系？" → RAG + GraphRAG 并行
+5. **网络搜索兜底**："明日方舟最新联动活动是什么？" → WebSearch 补充
 
 MIT License

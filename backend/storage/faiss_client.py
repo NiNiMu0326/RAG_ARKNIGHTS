@@ -94,6 +94,69 @@ class FAISSClientWrapper:
 
         return index, meta
 
+    def add_documents(
+        self,
+        collection_name: str,
+        documents: List[Document],
+        embeddings: List[List[float]] = None,
+        embedding_fn=None,
+    ) -> int:
+        """增量向已有 FAISS 索引追加文档。
+
+        加载已有索引 → 嵌入新文档 → add 到 FAISS → 更新 metadata → 保存。
+        返回追加后的总向量数。
+
+        Args:
+            collection_name: 集合名称
+            documents: 新文档列表
+            embeddings: 预计算的嵌入向量（可选）
+            embedding_fn: 嵌入函数（embeddings 为空时必填）
+        """
+        import faiss
+
+        # 生成新嵌入
+        if embeddings is None:
+            if embedding_fn is None:
+                raise ValueError("Either embeddings or embedding_fn must be provided")
+            batch_size = 20
+            embeddings = []
+            for i in range(0, len(documents), batch_size):
+                batch_docs = documents[i:i + batch_size]
+                texts = [d.page_content for d in batch_docs]
+                batch_emb = embedding_fn.embed_documents(texts)
+                embeddings.extend(batch_emb)
+
+        # 加载已有索引
+        result = self.load_index(collection_name)
+        if result is None:
+            # 索引不存在，创建新的
+            self.build_index(collection_name, documents, embeddings)
+            return len(documents)
+
+        index, meta = result
+        old_count = index.ntotal
+
+        # 归一化并追加向量
+        vectors = np.array(embeddings, dtype=np.float32)
+        faiss.normalize_L2(vectors)
+        index.add(vectors)
+
+        # 追加 metadata
+        for i, doc in enumerate(documents):
+            new_id = old_count + i
+            meta[new_id] = {
+                "id": doc.metadata.get("chunk_id", f"doc_{new_id}"),
+                "page_content": doc.page_content,
+                "metadata": dict(doc.metadata),
+            }
+
+        # 保存
+        faiss.write_index(index, str(self._index_path(collection_name)))
+        with open(self._meta_path(collection_name), "wb") as f:
+            pickle.dump(meta, f)
+
+        return index.ntotal
+
     def get_chunk_count(self, collection_name: str) -> int:
         """Get number of vectors in the index."""
         import faiss

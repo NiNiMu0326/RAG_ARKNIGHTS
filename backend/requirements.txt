@@ -19,6 +19,8 @@ bcrypt>=4.0.0
 PyJWT>=2.8.0
 httpx>=0.25.0
 jieba>=0.42.1
+jsonpointer>=3.0.0
+langfuse>=2.0.0
 
 ragas>=0.4.0
 nest-asyncio

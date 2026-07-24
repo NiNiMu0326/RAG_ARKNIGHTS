@@ -66,6 +66,30 @@ class BM25Indexer:
                 'b': self.b
             }, f)
 
+    def add_documents(self, new_corpus: List[str], new_corpus_ids: List[str] = None):
+        """增量添加新文档到已有索引。
+
+        BM25 的全局统计（IDF、平均文档长度）依赖全部文档，
+        因此需要重建 BM25Okapi，但不涉及 API 调用，速度很快。
+        """
+        if not new_corpus:
+            return
+
+        self.corpus.extend(new_corpus)
+        self.corpus_size = len(self.corpus)
+
+        if new_corpus_ids:
+            self.corpus_ids.extend(new_corpus_ids)
+        else:
+            start = len(self.corpus_ids)
+            self.corpus_ids.extend([f"doc_{start + i}" for i in range(len(new_corpus))])
+
+        # Rebuild BM25 with full corpus
+        tokenized_corpus = [_tokenize(doc) for doc in self.corpus]
+        self.bm25 = BM25Okapi(tokenized_corpus, k1=self.k1, b=self.b)
+        self.doc_lengths = [len(t) for t in tokenized_corpus]
+        self.avgdl = sum(self.doc_lengths) / len(self.doc_lengths) if self.doc_lengths else 0
+
     @classmethod
     def load(cls, path: str) -> 'BM25Indexer':
         """Load index from file."""

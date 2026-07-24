@@ -7,6 +7,9 @@
       <button class="nav-tab" :class="{ active: activeTab === 'dashboard' }" @click="activeTab = 'dashboard'">
         <span>2</span> 数据仪表板
       </button>
+      <button class="nav-tab" :class="{ active: activeTab === 'traces' }" @click="activeTab = 'traces'">
+        <span>3</span> 观测追踪
+      </button>
     </nav>
 
     <div class="admin-content" :data-page="activeTab">
@@ -172,6 +175,50 @@
         </div>
       </div>
 
+      <div v-if="activeTab === 'traces'" class="tab-content">
+        <div class="section-header">
+          <h2 class="section-title">LangFuse 可观测性</h2>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <h3>追踪状态</h3>
+          </div>
+          <div class="panel-body">
+            <div v-if="tracesStatus" class="traces-status">
+              <div class="traces-status-item">
+                <span class="traces-status-label">状态</span>
+                <span class="traces-status-value" :class="{ enabled: tracesStatus.enabled }">
+                  {{ tracesStatus.enabled ? '已启用' : '未配置' }}
+                </span>
+              </div>
+              <div class="traces-status-item" v-if="tracesStatus.enabled">
+                <span class="traces-status-label">LangFuse 地址</span>
+                <span class="traces-status-value">{{ tracesStatus.host }}</span>
+              </div>
+              <div class="traces-status-message">
+                {{ tracesStatus.message }}
+              </div>
+            </div>
+            <div v-else class="empty-state" style="padding: 40px;">
+              <div class="empty-state-title">加载中...</div>
+            </div>
+            <div class="traces-info" v-if="tracesStatus?.enabled">
+              <h4>使用说明</h4>
+              <ul>
+                <li>每次 Agent 对话的完整链路（LLM 调用 → 工具执行 → 最终回答）会自动记录到 LangFuse</li>
+                <li>访问 <a :href="tracesStatus.host" target="_blank" rel="noopener">{{ tracesStatus.host }}</a> 查看详细 Trace、token 消耗和延迟分析</li>
+                <li>Trace 包含每轮 LLM 调用的输入/输出/token、每个工具的入参/结果/耗时</li>
+              </ul>
+              <h4>配置方式</h4>
+              <p>在 <code>backend/.env</code> 中设置以下环境变量：</p>
+              <pre>LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_HOST=https://cloud.langfuse.com</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
 
     <!-- 确认弹窗 -->
@@ -238,6 +285,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onActivated, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { api, debounce } from '../api'
 
 const activeTab = ref('chunk')
@@ -253,8 +301,19 @@ const stats = ref(null)
 const graphData = ref(null)
 const chunkNavInput = ref(1)
 const dashboardLoaded = ref(false)
+const tracesStatus = ref(null)
+const route = useRoute()
 
 onMounted(() => {
+  const collection = route.query.collection
+  const chunk = route.query.chunk
+  if (collection && ['operators', 'stories', 'knowledge'].includes(collection)) {
+    chunkCollection.value = collection
+    if (chunk) {
+      loadChunksForCollection(collection, chunk)
+      return
+    }
+  }
   loadChunks()
 })
 
@@ -264,11 +323,15 @@ onActivated(() => {
 })
 
 // 懒加载：切换到数据仪表板时才加载 stats 和 graphData
+// 切换到追踪页时加载追踪状态
 watch(activeTab, (tab) => {
   if (tab === 'dashboard' && !dashboardLoaded.value) {
     dashboardLoaded.value = true
     loadStats()
     loadGraphData()
+  }
+  if (tab === 'traces') {
+    loadTracesStatus()
   }
 })
 
@@ -299,6 +362,29 @@ async function loadChunks() {
       selectedChunk.value = null
       selectedChunkContent.value = ''
     }
+  }
+  loadingChunks.value = false
+}
+
+async function loadChunksForCollection(collection, targetChunk) {
+  loadingChunks.value = true
+  try {
+    const newChunks = await api.getChunks(collection)
+    chunks.value = newChunks
+    // Extract filename part from chunk_id like "operators_char_103_angel" -> "char_103_angel"
+    const filenamePart = targetChunk.replace(/^(operators|stories|knowledge)_/, '')
+    const found = newChunks.find(c =>
+      c.filename.includes(filenamePart) ||
+      c.filename === filenamePart + '.md' ||
+      c.name === filenamePart
+    )
+    if (found) {
+      await selectChunk(found)
+    } else if (newChunks.length > 0) {
+      await selectChunk(newChunks[0])
+    }
+  } catch (e) {
+    console.error('Failed to load chunks for direct nav:', e)
   }
   loadingChunks.value = false
 }
@@ -372,6 +458,14 @@ async function loadGraphData() {
     graphData.value = await api.getGraphData()
   } catch (e) {
     graphData.value = null
+  }
+}
+
+async function loadTracesStatus() {
+  try {
+    tracesStatus.value = await api.getTracesStatus()
+  } catch (e) {
+    tracesStatus.value = { enabled: false, message: '无法获取追踪状态' }
   }
 }
 
@@ -591,6 +685,41 @@ function confirmCancel() {
 .pie-legend-color { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
 .pie-legend-name { font-size: 0.85rem; color: var(--text-secondary); }
 .pie-legend-value { font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-primary); margin-left: auto; }
+
+/* Traces status styles */
+.traces-status-item {
+  display: flex;
+  justify-content: space-between;
+  padding: var(--spacing-sm) 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.traces-status-label { color: var(--text-dim); }
+.traces-status-value.enabled { color: #00e5c7; font-weight: 600; }
+.traces-status-message {
+  margin-top: var(--spacing-md);
+  padding: var(--spacing-md);
+  background: var(--bg-panel-raised, rgba(255,255,255,0.05));
+  border-radius: 8px;
+  font-size: 0.95em;
+}
+.traces-info {
+  margin-top: var(--spacing-lg);
+  padding: var(--spacing-md);
+  background: var(--bg-panel-raised, rgba(255,255,255,0.05));
+  border-radius: 8px;
+  line-height: 1.8;
+}
+.traces-info h4 { margin-top: var(--spacing-md); margin-bottom: var(--spacing-sm); }
+.traces-info ul { padding-left: var(--spacing-lg); }
+.traces-info pre {
+  background: var(--bg-deep, #1a1a2e);
+  color: var(--color-primary);
+  padding: var(--spacing-md);
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.85em;
+  margin-top: var(--spacing-sm);
+}
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
