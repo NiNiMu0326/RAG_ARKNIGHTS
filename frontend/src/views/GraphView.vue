@@ -442,7 +442,8 @@ watch(() => controller.graphData.value, () => {
 .graph-page {
   position: relative;
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   background: var(--bg-deep);
 }
 
@@ -726,5 +727,34 @@ watch(() => controller.graphData.value, () => {
 .kg-empty-hint {
   font-size: 0.85rem;
   color: var(--text-dim);
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .kg-zoom-controls {
+    bottom: calc(var(--spacing-md) + env(safe-area-inset-bottom));
+    right: var(--spacing-md);
+  }
+  .kg-zoom-btn {
+    width: 40px;
+    height: 40px;
+    font-size: 1.1rem;
+  }
+  .kg-edge-info {
+    top: var(--spacing-md);
+    left: var(--spacing-md);
+    right: var(--spacing-md);
+    width: auto;
+    max-width: none;
+  }
+  .kg-empty-title {
+    font-size: 1rem;
+    padding: 0 var(--spacing-lg);
+    text-align: center;
+  }
+  .kg-empty-hint {
+    padding: 0 var(--spacing-lg);
+    text-align: center;
+  }
 }
 </style>

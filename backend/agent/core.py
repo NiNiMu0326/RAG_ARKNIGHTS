@@ -308,13 +308,16 @@ async def agent_loop(
     # Get or create session BEFORE adding message, so message is never lost
     session = await session_manager.get_session(session_id)
     if session is None:
-        # Session expired — create new one and notify frontend via error event
-        # (main.py will also set X-New-Session-Id header)
-        # Clean up stale web search dedup state for the expired session
+        # Session expired (or was deleted) between main.py's check and this call.
+        # create_session() returns the new session ID (str), NOT a Session object.
         from backend.agent.tool_implementations import clear_web_search_seen
         clear_web_search_seen(session_id)
-        session = await session_manager.create_session()
-        logger.warning(f"[SESSION] Session '{session_id}' expired, created new: {session.session_id}")
+        new_session_id = await session_manager.create_session()
+        logger.warning(f"[SESSION] Session '{session_id}' expired, created new: {new_session_id}")
+        session_id = new_session_id
+        session = await session_manager.get_session(session_id)
+        # Notify frontend so it can re-map its backend session ID
+        yield _sse_event("session_renewed", session_id=session_id)
 
     # Add user message first — even if session was just recreated
     # Validate for prompt injection

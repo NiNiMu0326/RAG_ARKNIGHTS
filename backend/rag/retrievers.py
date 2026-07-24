@@ -5,6 +5,7 @@ Wraps the existing hybrid_search logic as a LangChain BaseRetriever.
 import time
 import hashlib
 import logging
+import threading
 import warnings
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -74,6 +75,40 @@ def clear_recall_cache() -> None:
     """Clear multi-channel recall cache. Call when indexes are rebuilt."""
     global _RECALL_CACHE
     _RECALL_CACHE.clear()
+    clear_vector_store_cache()
+
+
+# ===== Process-level FAISS vector store cache =====
+# to_langchain_faiss() reads the index + unpickles metadata from disk on every
+# call. MultiChannelRetriever instances are per-request, so their instance-level
+# _vector_stores cache never survives a single tool call. Cache stores process-wide.
+_VECTOR_STORES: Dict[str, Any] = {}
+_VECTOR_STORES_LOCK = threading.Lock()
+
+
+def get_cached_vector_store(collection_name: str, embeddings, faiss_index_dir: str = ""):
+    """Load a LangChain FAISS vector store once per process, then reuse it.
+
+    Returns None if the index files don't exist (caller falls back to BM25-only).
+    """
+    if collection_name in _VECTOR_STORES:
+        return _VECTOR_STORES[collection_name]
+    with _VECTOR_STORES_LOCK:
+        if collection_name in _VECTOR_STORES:
+            return _VECTOR_STORES[collection_name]
+        client = FAISSClientWrapper(index_dir=faiss_index_dir or config.FAISS_INDEX_DIR_STR)
+        vs = client.to_langchain_faiss(collection_name, embeddings)
+        if vs is None:
+            return None
+        _VECTOR_STORES[collection_name] = vs
+        logger.info(f"[FAISS] Loaded and cached vector store: {collection_name}")
+        return vs
+
+
+def clear_vector_store_cache() -> None:
+    """Clear cached FAISS vector stores. Call when indexes are rebuilt."""
+    with _VECTOR_STORES_LOCK:
+        _VECTOR_STORES.clear()
 
 
 def _rrf_fusion(rankings: List[Dict[str, int]], k: int = 60) -> Dict[str, float]:
@@ -252,7 +287,9 @@ class MultiChannelRetriever(BaseRetriever):
                 return []
             bm25_indexer = self.bm25_indexes[coll_name]
             try:
-                vs = self._get_vector_store(coll_name)
+                vs = get_cached_vector_store(coll_name, self.embeddings, self.faiss_index_dir)
+                if vs is None:
+                    raise FileNotFoundError(f"FAISS index for '{coll_name}' not found")
                 return _hybrid_search_collection(
                     query=query,
                     collection_name=coll_name,

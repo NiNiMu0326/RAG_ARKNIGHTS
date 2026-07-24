@@ -276,7 +276,7 @@ export const api = {
 
         try {
           const event = JSON.parse(jsonStr)
-          _dispatchSSEEvent(event, { onThinkingStart, onThinkingDone, onToolCallsStart, onToolExecuting, onToolCallResult, onThinkingDelta, onAnswerDelta, onAnswerDone, onError })
+          _dispatchSSEEvent(event, { onNewSessionId, onThinkingStart, onThinkingDone, onToolCallsStart, onToolExecuting, onToolCallResult, onThinkingDelta, onAnswerDelta, onAnswerDone, onError })
         } catch (e) {
           console.warn('Failed to parse SSE event:', jsonStr, e)
         }
@@ -289,7 +289,7 @@ export const api = {
       if (jsonStr) {
         try {
           const event = JSON.parse(jsonStr)
-        _dispatchSSEEvent(event, { onThinkingStart, onToolCallsStart, onToolExecuting, onToolCallResult, onThinkingDelta, onAnswerDelta, onAnswerDone, onError })
+        _dispatchSSEEvent(event, { onNewSessionId, onThinkingStart, onThinkingDone, onToolCallsStart, onToolExecuting, onToolCallResult, onThinkingDelta, onAnswerDelta, onAnswerDone, onError })
         } catch (e) {
           console.warn('Failed to parse final SSE event:', jsonStr, e)
         }
@@ -300,6 +300,7 @@ export const api = {
 
 function _dispatchSSEEvent(event, callbacks) {
   switch (event.type) {
+    case 'session_renewed': callbacks.onNewSessionId?.(event.session_id); break
     case 'thinking_start': callbacks.onThinkingStart?.(event); break
     case 'thinking_delta': callbacks.onThinkingDelta?.(event); break
     case 'thinking_done': callbacks.onThinkingDone?.(event); break

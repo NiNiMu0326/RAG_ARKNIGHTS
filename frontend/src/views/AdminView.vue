@@ -742,11 +742,16 @@ function confirmCancel() {
 
 /* Mobile responsive */
 @media (max-width: 768px) {
-  .admin-page { padding: var(--spacing-md); }
+  .admin-page { padding: var(--spacing-md); padding-bottom: calc(var(--spacing-md) + env(safe-area-inset-bottom)); }
   .nav-tabs { flex-wrap: wrap; gap: var(--spacing-xs); }
   .nav-tab { padding: var(--spacing-xs) var(--spacing-md); font-size: 0.75rem; }
   .chunk-browser { grid-template-columns: 1fr; min-height: auto; }
+  .chunk-search-results { max-height: 50vh; }
   .chunk-preview { min-height: 400px; }
+  .chunk-preview-header { padding: var(--spacing-sm) var(--spacing-md); }
+  .chunk-preview-title { font-size: 0.85rem; word-break: break-all; }
+  .chunk-preview-stats { gap: var(--spacing-sm); font-size: 0.75rem; }
+  .chunk-nav-inline { margin-left: 0; width: 100%; justify-content: flex-end; }
   .stats-row { grid-template-columns: repeat(3, 1fr); gap: var(--spacing-sm); }
   .stat-card { padding: var(--spacing-md); }
   .stat-value { font-size: 1.2rem; }
@@ -756,5 +761,7 @@ function confirmCancel() {
   .relation-section-left { flex-wrap: wrap; }
   .relation-detail-modal { width: calc(100vw - 32px) !important; }
   .relation-detail-triple { font-size: 0.8rem; }
+  .pie-chart-container { flex-direction: column; gap: var(--spacing-md); }
+  .pie-chart { width: 140px; height: 140px; }
 }
 </style>

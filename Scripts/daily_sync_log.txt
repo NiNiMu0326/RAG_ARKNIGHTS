@@ -1,0 +1,36 @@
+[2026-07-24 13:14:20 UTC] ============================================================
+[2026-07-24 13:14:20 UTC] 每日自动同步开始 (dry-run)
+[2026-07-24 13:14:20 UTC] 
+[GraphRAG 补抽模式]
+[2026-07-24 13:14:20 UTC]   基于 entity_relations.json 的 mtime 检测需要更新的文件...
+[2026-07-24 13:14:20 UTC]   补抽模式：entity_relations.json mtime=2026-04-11 14:44
+[2026-07-24 13:14:20 UTC]   GraphRAG: 发现 +888 operators, +19 stories 需抽取
+[2026-07-24 13:14:20 UTC]       [operators] char_002_amiya.md
+[2026-07-24 13:14:20 UTC]       [operators] char_003_kalts.md
+[2026-07-24 13:14:20 UTC]       [operators] char_009_12fce.md
+[2026-07-24 13:14:20 UTC]       [operators] char_010_chen.md
+[2026-07-24 13:14:20 UTC]       [operators] char_017_huang.md
+[2026-07-24 13:14:20 UTC]       [stories] act21mini.md
+[2026-07-24 13:14:20 UTC]       [stories] act50side.md
+[2026-07-24 13:14:20 UTC]       [stories] act51side.md
+[2026-07-24 13:14:20 UTC]       [stories] main_17.md
+[2026-07-24 13:14:20 UTC]       [stories] story_beagle_set_1.md
+[2026-07-24 13:14:20 UTC]       ... 还有 897 个文件
+[2026-07-24 13:14:20 UTC] 
+GraphRAG 无需更新
+[2026-07-24 13:47:43 UTC]   GraphRAG: 发现 +0 operators, +19 stories 需抽取
+[2026-07-24 13:47:43 UTC]   现有: 1165 entities (6 类型), 551 relations
+[2026-07-24 13:47:44 UTC]   正在抽取 stories (19 文件)...
+[2026-07-24 13:58:27 UTC]       10/19 | types: 11 | operators: 835
+[2026-07-24 14:00:36 UTC]       19/19 | types: 12 | operators: 852
+[2026-07-24 14:00:36 UTC]   合并结果: +28 entities, +22 relations
+[2026-07-24 14:00:36 UTC]   总计: 1193 entities (6 类型), 573 relations
+[2026-07-24 14:32:34 UTC]   GraphRAG: 发现 +29 operators, +0 stories 需抽取
+[2026-07-24 14:32:34 UTC]   现有: 1193 entities (6 类型), 573 relations
+[2026-07-24 14:32:34 UTC]   正在抽取 operators (29 文件)...
+[2026-07-24 14:35:20 UTC]       10/29 | types: 12 | operators: 852
+[2026-07-24 14:37:36 UTC]       20/29 | types: 12 | operators: 852
+[2026-07-24 14:40:21 UTC]       29/29 | types: 12 | operators: 852
+[2026-07-24 14:40:21 UTC]   合并结果: +39 entities, +132 relations
+[2026-07-24 14:40:21 UTC]   总计: 1232 entities (6 类型), 705 relations
+[2026-07-24 14:40:21 UTC]     ✓ 已保存到 D:\Agent\ARKNIGHTSAgent\chunks\graphrag\entity_relations.json

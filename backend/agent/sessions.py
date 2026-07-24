@@ -18,6 +18,7 @@ class Session:
     """A conversation session with full message history."""
     session_id: str
     created_at: float = field(default_factory=time.time)
+    last_active: float = field(default_factory=time.time)
     messages: List[Dict[str, Any]] = field(default_factory=list)
 
     def add_message(self, role: str, content: str = "", **kwargs):
@@ -152,9 +153,9 @@ class SessionManager:
         await self._maybe_cleanup()
 
         async with self._lock:
-            # Evict oldest if at capacity
+            # Evict least-recently-active if at capacity
             if len(self._sessions) >= self._max_sessions:
-                oldest_id = min(self._sessions, key=lambda k: self._sessions[k].created_at)
+                oldest_id = min(self._sessions, key=lambda k: self._sessions[k].last_active)
                 del self._sessions[oldest_id]
                 self._evict_web_search_seen(oldest_id)
                 logger.info(f"[SESSION] Evicted oldest session: {oldest_id}")
@@ -172,15 +173,17 @@ class SessionManager:
                 logger.warning(f"[SESSION] Not found: {session_id}")
                 return None
 
-            # Check TTL
-            age = time.time() - session.created_at
-            if age > self._ttl:
+            # Sliding TTL: expire based on last activity, not creation time,
+            # so an actively-used session is never killed mid-conversation
+            idle = time.time() - session.last_active
+            if idle > self._ttl:
                 del self._sessions[session_id]
                 self._evict_web_search_seen(session_id)
-                logger.warning(f"[SESSION] Expired: {session_id} (age={age:.0f}s, ttl={self._ttl}s)")
+                logger.warning(f"[SESSION] Expired: {session_id} (idle={idle:.0f}s, ttl={self._ttl}s)")
                 return None
 
-            logger.debug(f"[SESSION] Found: {session_id} (age={age:.0f}s, messages={len(session.messages)})")
+            session.last_active = time.time()
+            logger.debug(f"[SESSION] Found: {session_id} (idle={idle:.0f}s, messages={len(session.messages)})")
             return session
 
     async def delete_session(self, session_id: str):
@@ -205,7 +208,7 @@ class SessionManager:
         expired = []
         async with self._lock:
             for sid, session in self._sessions.items():
-                if now - session.created_at > self._ttl:
+                if now - session.last_active > self._ttl:
                     expired.append(sid)
             for sid in expired:
                 del self._sessions[sid]

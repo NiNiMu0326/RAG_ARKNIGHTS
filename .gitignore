@@ -18,3 +18,5 @@ static/
 backend/.playwright-cli/
 .gitnexus
 .claude/
+.codebuddy/
+frontend_backup/

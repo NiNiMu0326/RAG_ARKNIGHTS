@@ -100,6 +100,7 @@ function openExternal() {
   width: 480px;
   max-width: 100vw;
   height: 100vh;
+  height: 100dvh;
   background: var(--bg-panel, #111922);
   border-left: 1px solid var(--border-color, rgba(0, 229, 204, 0.2));
   z-index: 501;
@@ -273,6 +274,7 @@ function openExternal() {
 @media (max-width: 768px) {
   .source-drawer-panel {
     width: 100vw;
+    padding-bottom: env(safe-area-inset-bottom);
   }
   .source-drawer-overlay {
     background: rgba(0, 0, 0, 0.5);

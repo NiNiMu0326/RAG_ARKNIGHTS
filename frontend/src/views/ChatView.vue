@@ -2,7 +2,7 @@
   <div class="chat-page">
     <div class="chat-main">
       <div class="chat-panel">
-        <div class="chat-messages" ref="messagesContainer" @click="handleSourceClick">
+        <div class="chat-messages" ref="messagesContainer" @click="handleSourceClick" @scroll.passive="handleMessagesScroll">
           <div v-if="!sessionStore.currentSession || sessionStore.currentSession.messages?.length === 0" class="empty-state">
             <svg class="empty-state-icon" viewBox="0 0 100 100" style="width: 48px; height: 48px;">
               <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="2"/>
@@ -17,12 +17,13 @@
               :key="`${msg.role || 'pending'}-${idx}`"
               class="chat-message"
               :class="msg.role"
+              v-memo="[msg, expandedTools.length, expandedThinking.length]"
             >
               <!-- User message -->
               <template v-if="msg.role === 'user'">
                 <div class="chat-bubble">
                   <div class="chat-role">You</div>
-                  <div class="chat-text">{{ escapeHtml(msg.content) }}</div>
+                  <div class="chat-text">{{ msg.content }}</div>
                 </div>
                 <div class="chat-time">{{ formatTime(new Date(msg.timestamp)) }}</div>
               </template>
@@ -31,9 +32,14 @@
               <template v-else-if="msg.role === 'assistant'">
                 <div class="chat-bubble">
                   <div class="chat-role">Arknights RAG</div>
-                  <div class="chat-text" v-html="renderMessageWithSources(msg.content, msg.sources)"></div>
+                  <div class="chat-text markdown-body" v-html="renderMessageWithSources(msg.content, msg.sources)"></div>
                 </div>
-                <div class="chat-time">{{ formatTime(new Date(msg.timestamp)) }}</div>
+                <div class="chat-msg-footer">
+                  <button class="msg-action-btn" @click="copyMessage(msg.content)" title="复制回答">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                  </button>
+                  <div class="chat-time">{{ formatTime(new Date(msg.timestamp)) }}</div>
+                </div>
               </template>
 
               <!-- Thinking display (independent, before tool calls and answer) -->
@@ -201,7 +207,7 @@
             <div class="chat-message assistant" v-if="currentAnswer">
               <div class="chat-bubble">
                 <div class="chat-role">Arknights RAG</div>
-                <div class="current-answer" v-html="renderMessageWithSources(currentAnswer, currentAnswerSources)"></div>
+                <div class="current-answer markdown-body" v-html="renderMessageWithSources(currentAnswer, currentAnswerSources)"></div>
               </div>
             </div>
             <div class="chat-message assistant" v-if="!currentAnswer && !currentThinking">
@@ -246,6 +252,9 @@
                 @input="autoResize"
               ></textarea>
             </div>
+          <button v-if="isLoading" type="button" class="chat-stop" @click="stopGeneration" title="停止生成">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+          </button>
           <button type="submit" class="chat-submit" :class="{ 'is-queued': isLoading && inputText.trim() }" title="发送">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1">
               <path d="M22 2L11 13"/>
@@ -259,7 +268,7 @@
               v-for="(action, idx) in quickQuestionsStore.quickActions"
               :key="`qa-${idx}`"
               class="quick-action"
-              @click="inputText = action.question"
+              @click="applyQuickAction(action.question)"
               :title="action.question"
             >
               {{ action.label }}
@@ -284,11 +293,14 @@ import { useQuickQuestionsStore } from '../stores/quickQuestions'
 import { useSettingsStore } from '../stores/settings'
 import { useSourceDrawerStore } from '../stores/sourceDrawer'
 import { api, formatTime, escapeHtml } from '../api'
+import { renderMarkdown } from '../utils/markdown'
+import { useToastStore } from '../stores/toast'
 
 const sessionStore = useSessionStore()
 const quickQuestionsStore = useQuickQuestionsStore()
 const settingsStore = useSettingsStore()
 const sourceDrawerStore = useSourceDrawerStore()
+const toastStore = useToastStore()
 
 const inputText = ref('')
 const isLoading = ref(false)
@@ -424,8 +436,8 @@ function formatToolResult(data) {
 function renderMessageWithSources(content, messageSources) {
   if (!content) return ''
 
-  // Escape HTML first for safety
-  let html = escapeHtml(content)
+  // Markdown 渲染 + DOMPurify 消毒（替代原先纯文本转义，支持富文本回答）
+  let html = renderMarkdown(content)
 
   // Build a lookup from chunk_id → source data for web URLs
   const sourceByChunkId = {}
@@ -598,6 +610,7 @@ async function sendMessage() {
     }
   })
   currentAnswer.value = ''
+  pendingAnswerDelta = ''
   currentAnswerSources.value = null
   expandedTools.value = []
   expandedThinking.value = []
@@ -611,6 +624,7 @@ async function sendMessage() {
   // Capture session ID AFTER addMessage (which may create a new session)
   const streamSessionId = sessionStore.currentSessionId
   originalSessionId.value = streamSessionId
+  userAtBottom.value = true
   nextTick(() => scrollToBottom())
 
   // Create AbortController for cancellation
@@ -674,6 +688,7 @@ async function sendMessage() {
         }
         // Discard any stray answer content (tool round doesn't produce final answer)
         currentAnswer.value = ''
+        pendingAnswerDelta = ''
         currentRound.value = event.round || currentRound.value + 1
         const calls = event.tool_calls.map(tc => ({
           id: tc.id,
@@ -698,9 +713,10 @@ async function sendMessage() {
       },
 
       onAnswerDelta(event) {
-        const delta = event.delta || ''
         // Backend already parses <think/> tags, so content_delta is pure answer text
-        currentAnswer.value += delta
+        // rAF 批量刷新，避免每个 SSE chunk 都触发一次重渲染
+        pendingAnswerDelta += event.delta || ''
+        scheduleAnswerFlush()
       },
 
       onThinkingDelta(event) {
@@ -719,6 +735,7 @@ async function sendMessage() {
       },
 
       onAnswerDone(event) {
+        flushPendingDelta()
         const thinkTime = thinkingStartTime.value ? Date.now() - thinkingStartTime.value : 0
         // Save thinking as independent message if present
         if (currentThinking.value) {
@@ -754,6 +771,7 @@ async function sendMessage() {
     })
   } catch (error) {
     // Save partial thinking and answer before clearing
+    flushPendingDelta()
     const partialThinking = currentThinking.value
     const partialAnswer = currentAnswer.value
 
@@ -887,13 +905,66 @@ function scrollToBottom() {
     }
   })
 }
+
+// ===== 流式渲染优化：rAF 批量刷新 + 智能跟随滚动 =====
+const userAtBottom = ref(true)
+let pendingAnswerDelta = ''
+let answerFlushScheduled = false
+
+function flushPendingDelta() {
+  if (pendingAnswerDelta) {
+    currentAnswer.value += pendingAnswerDelta
+    pendingAnswerDelta = ''
+  }
+}
+
+function scheduleAnswerFlush() {
+  if (answerFlushScheduled) return
+  answerFlushScheduled = true
+  requestAnimationFrame(() => {
+    answerFlushScheduled = false
+    flushPendingDelta()
+    // 仅当用户位于底部附近时才自动跟随滚动，上翻阅读时不打断
+    if (userAtBottom.value) scrollToBottom()
+  })
+}
+
+function handleMessagesScroll() {
+  const el = messagesContainer.value
+  if (!el) return
+  userAtBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+}
+
+function stopGeneration() {
+  abortController.value?.abort()
+}
+
+async function copyMessage(content) {
+  try {
+    await navigator.clipboard.writeText(content)
+    toastStore.show('已复制到剪贴板')
+  } catch {
+    toastStore.show('复制失败', 'error')
+  }
+}
+
+function applyQuickAction(question) {
+  inputText.value = question
+  nextTick(() => {
+    const textarea = document.querySelector('.chat-input')
+    if (textarea) {
+      textarea.focus()
+      autoResize({ target: textarea })
+    }
+  })
+}
 </script>
 
 <style scoped>
-.chat-page { display: flex; flex-direction: column; height: calc(100vh - 80px); }
+.chat-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .chat-main { flex: 1; display: flex; overflow: hidden; }
-.chat-panel { flex: 1; display: flex; flex-direction: column; }
-.chat-messages { flex: 1; overflow-y: auto; padding: var(--spacing-lg); min-height: 0; }
+.chat-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.chat-messages { flex: 1; overflow-y: auto; padding: var(--spacing-lg); min-height: 0; overscroll-behavior: contain; }
 .chat-input-area { padding: var(--spacing-lg); background: var(--bg-panel); border-top: 1px solid var(--border-color); }
 .chat-form { display: flex; gap: var(--spacing-md); align-items: center; }
 .chat-input-wrapper { flex: 1; position: relative; }
@@ -908,14 +979,14 @@ function scrollToBottom() {
 
 /* Mobile: hide sidebar, full-screen chat */
 @media (max-width: 768px) {
-  .chat-page { height: calc(100vh - 60px); }
-  .chat-input-area { padding: var(--spacing-md); }
-  .chat-input { font-size: 14px; min-height: 40px; padding: 10px 12px; padding-right: 40px; }
+  .chat-input-area { padding: var(--spacing-md); padding-bottom: calc(var(--spacing-md) + env(safe-area-inset-bottom)); }
+  .chat-input { font-size: 16px; min-height: 44px; padding: 10px 12px; padding-right: 40px; }
   .chat-messages { padding: var(--spacing-md); }
   .quick-actions { gap: var(--spacing-xs); }
   .quick-action { font-size: 0.75rem; padding: var(--spacing-xs) var(--spacing-sm); }
   .chat-message { max-width: 92%; }
   .chat-bubble { padding: var(--spacing-sm) var(--spacing-md); }
+  .thinking-card, .tool-call-card { max-width: 95%; }
 }
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: var(--spacing-xl); }
 .empty-state-title { font-family: var(--font-display); font-size: 1.25rem; color: var(--text-secondary); margin-bottom: var(--spacing-sm); }
@@ -1053,6 +1124,18 @@ function scrollToBottom() {
 .tool-detail-table td { padding: 3px 8px; border-bottom: 1px solid var(--border-color); color: var(--text-secondary); white-space: nowrap; }
 .tool-detail-table tr:hover td { background: var(--bg-dark); }
 .tool-detail-row-count { font-size: 0.7rem; color: var(--text-dim); margin-top: var(--spacing-xs); text-align: right; }
+
+/* Stop generation button */
+.chat-stop { width: 44px; height: 44px; padding: 0; margin-top: -6px; background: var(--bg-panel); border: 1px solid var(--color-danger); border-radius: 12px; color: var(--color-danger); cursor: pointer; transition: all var(--transition-fast); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.chat-stop:hover { background: var(--color-danger); color: #fff; box-shadow: 0 0 16px rgba(255, 71, 87, 0.4); }
+
+/* Message footer actions (copy etc.) */
+.chat-msg-footer { display: flex; align-items: center; justify-content: flex-end; gap: var(--spacing-xs); margin-top: var(--spacing-xs); }
+.chat-msg-footer .chat-time { margin-top: 0; }
+.msg-action-btn { background: none; border: none; color: var(--text-dim); cursor: pointer; padding: 3px; border-radius: 4px; display: flex; align-items: center; opacity: 0; transition: opacity var(--transition-fast), color var(--transition-fast); }
+.chat-message:hover .msg-action-btn { opacity: 1; }
+.msg-action-btn:hover { color: var(--color-primary); }
+@media (hover: none) { .msg-action-btn { opacity: 0.6; } .pending-action { opacity: 0.7; } }
 </style>
 
 <style>
@@ -1078,4 +1161,25 @@ function scrollToBottom() {
   font-style: italic;
   font-size: 0.9em;
 }
+
+/* Markdown rendering in assistant messages (unscoped: v-html bypasses scoped CSS) */
+.chat-message.assistant .chat-text.markdown-body,
+.chat-bubble .current-answer.markdown-body {
+  white-space: normal;
+}
+.markdown-body p { margin: 0 0 8px 0; }
+.markdown-body p:last-child { margin-bottom: 0; }
+.markdown-body ul, .markdown-body ol { margin: 4px 0 8px 0; padding-left: 22px; }
+.markdown-body li { margin: 2px 0; }
+.markdown-body > *:first-child { margin-top: 0; }
+.markdown-body code { background: var(--bg-dark); border: 1px solid var(--border-color); padding: 1px 5px; border-radius: 4px; font-family: var(--font-mono); font-size: 0.85em; }
+.markdown-body pre { background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 10px 12px; overflow-x: auto; margin: 8px 0; }
+.markdown-body pre code { background: none; border: none; padding: 0; font-size: 0.78rem; }
+.markdown-body table { border-collapse: collapse; margin: 8px 0; font-size: 0.85rem; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border-color); padding: 4px 10px; text-align: left; }
+.markdown-body th { background: var(--bg-dark); }
+.markdown-body blockquote { border-left: 3px solid var(--color-primary-dim); margin: 8px 0; padding: 2px 12px; color: var(--text-secondary); }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 { font-size: 1rem; margin: 12px 0 6px 0; }
+.markdown-body a { color: #58a6ff; }
+.markdown-body hr { border: none; border-top: 1px solid var(--border-color); margin: 12px 0; }
 </style>

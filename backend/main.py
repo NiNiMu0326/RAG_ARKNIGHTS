@@ -260,9 +260,14 @@ async def get_chunk(collection: str, filename: str):
     if collection not in valid_collections:
         raise HTTPException(status_code=400, detail=f"Invalid collection")
 
-    filepath = CHUNKS_DIR / collection / filename
-    if not filepath.exists():
-        raise HTTPException(status_code=404, detail=f"File not found")
+    # 防止路径穿越：解析后的路径必须仍位于该 collection 目录内
+    try:
+        filepath = (CHUNKS_DIR / collection / filename).resolve()
+        filepath.relative_to((CHUNKS_DIR / collection).resolve())
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not filepath.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
 
     content = filepath.read_text(encoding="utf-8")
     return {"filename": filename, "content": content}
@@ -1016,13 +1021,22 @@ _frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 if _frontend_dist.exists():
     app.mount("/assets", StaticFiles(directory=_frontend_dist / "assets"), name="static-assets")
 
+    _frontend_dist_resolved = _frontend_dist.resolve()
+
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):
-        """SPA catch-all: 非 API 路由统一返回 index.html，由前端路由处理。"""
-        file_path = _frontend_dist / full_path
-        if file_path.is_file():
+        """SPA catch-all: 非 API 路由统一返回 index.html，由前端路由处理。
+
+        安全：resolve 后必须仍在 dist 目录内，防止 ../../ 路径穿越读取任意文件。
+        """
+        try:
+            file_path = (_frontend_dist_resolved / full_path).resolve()
+            file_path.relative_to(_frontend_dist_resolved)
+        except (ValueError, OSError):
+            file_path = None
+        if file_path and file_path.is_file():
             return FileResponse(file_path)
-        return FileResponse(_frontend_dist / "index.html")
+        return FileResponse(_frontend_dist_resolved / "index.html")
 
 
 # ============== Run Server ==============

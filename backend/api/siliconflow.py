@@ -100,3 +100,41 @@ class SiliconFlowClient:
             raise Exception(f"Invalid JSON response from {url}: {response.text[:200]}")
         return result["results"]
 
+    def chat(self, messages: List[Dict[str, str]], model: str = None,
+             temperature: float = 0.1, max_tokens: int = 4096) -> str:
+        """
+        Call SiliconFlow Chat Completions API (OpenAI-compatible).
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'.
+            model: Model name. Defaults to Qwen/Qwen3-32B.
+            temperature: Sampling temperature.
+            max_tokens: Max tokens to generate.
+
+        Returns:
+            The model's text response.
+        """
+        model = model or "Qwen/Qwen3-32B"
+        url = f"{self.base_url}/chat/completions"
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        response = self._session.post(url, headers=headers, json=payload, timeout=300)
+        response.raise_for_status()
+
+        try:
+            result = response.json()
+        except ValueError:
+            raise Exception(f"Invalid JSON response from {url}: {response.text[:200]}")
+        return result["choices"][0]["message"]["content"]
+

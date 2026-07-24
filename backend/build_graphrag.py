@@ -76,8 +76,8 @@ def build_all():
     
     for i in range(0, len(op_files), extractor.BATCH_SIZE):
         batch = op_files[i:i+extractor.BATCH_SIZE]
-        results, batch_types = extractor.extract_batch(
-            [str(f) for f in batch], 
+        results, batch_types, new_operators = extractor.extract_batch(
+            [str(f) for f in batch],
             known_relation_types,
             extract_key_sections=False
         )
@@ -101,8 +101,8 @@ def build_all():
     
     for i in range(0, len(story_files), extractor.BATCH_SIZE):
         batch = story_files[i:i+extractor.BATCH_SIZE]
-        results, batch_types = extractor.extract_batch(
-            [str(f) for f in batch], 
+        results, batch_types, new_operators = extractor.extract_batch(
+            [str(f) for f in batch],
             known_relation_types,
             extract_key_sections=True
         )
@@ -119,7 +119,7 @@ def build_all():
         print(f"  Processed {processed}/{len(story_files)} | types: {len(known_relation_types)}")
     
     # Deduplicate and save
-    return extractor._deduplicate_and_save(all_entities, all_relations, str(output_path), known_relation_types)
+    return extractor._deduplicate_and_save(all_entities, all_relations, str(output_path))
 
 
 if __name__ == "__main__":
