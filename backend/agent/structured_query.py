@@ -107,8 +107,8 @@ def _clean_sql(sql: str) -> str:
         raise ValueError("只允许 SELECT 查询")
 
     # Block dangerous keywords via precompiled regex
-    if _DANGEROUS_RE.search(cleaned):
-        match = _DANGEROUS_RE.search(cleaned)
+    match = _DANGEROUS_RE.search(cleaned)
+    if match:
         raise ValueError(f"不允许使用 {match.group(0)} 操作")
 
     # Validate table names against allowlist

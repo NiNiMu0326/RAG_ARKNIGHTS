@@ -3,6 +3,7 @@ Session management for AgenticRAG.
 In-memory session store with TTL cleanup.
 """
 
+import json
 import time
 import uuid
 import asyncio
@@ -57,7 +58,6 @@ class Session:
         if isinstance(result, str):
             content = result
         else:
-            import json
             try:
                 content = json.dumps(result, ensure_ascii=False)
             except (TypeError, ValueError):

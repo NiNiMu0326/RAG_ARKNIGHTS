@@ -300,8 +300,8 @@ export const useSessionStore = defineStore('sessions', () => {
     saveSessions()
   }
 
-  function addToolCallMessage(toolCalls, roundNum) {
-    let targetSessionId = currentSessionId.value
+  function addToolCallMessage(toolCalls, roundNum, sessionId = null) {
+    let targetSessionId = sessionId || currentSessionId.value
     if (!targetSessionId || !sessions.value[targetSessionId]) return
 
     const session = sessions.value[targetSessionId]
@@ -315,8 +315,8 @@ export const useSessionStore = defineStore('sessions', () => {
     saveSessions()
   }
 
-  function updateToolCallResult(toolCallId, result) {
-    let targetSessionId = currentSessionId.value
+  function updateToolCallResult(toolCallId, result, sessionId = null) {
+    let targetSessionId = sessionId || currentSessionId.value
     if (!targetSessionId || !sessions.value[targetSessionId]) return
 
     const session = sessions.value[targetSessionId]
@@ -335,6 +335,87 @@ export const useSessionStore = defineStore('sessions', () => {
       session.messages.splice(msgIdx, 1, { ...msg, results: newResults })
       saveSessions()
     }
+  }
+
+  // Mark all unresolved tool calls as interrupted. Used when a stream is
+  // aborted/errored mid-execution, and to sweep stale pending state on load
+  // (e.g. page was closed while tools were running).
+  function finalizePendingToolCalls(sessionId = null, summary = '已中断') {
+    const ids = sessionId ? [sessionId] : Object.keys(sessions.value)
+    let changed = false
+    for (const id of ids) {
+      const session = sessions.value[id]
+      if (!session?.messages) continue
+      session.messages.forEach((msg, msgIdx) => {
+        if (msg.role !== 'tool_call' || !msg.calls) return
+        const pending = msg.calls.filter(c => !msg.results?.[c.id])
+        if (pending.length === 0) return
+        const newResults = { ...(msg.results || {}) }
+        pending.forEach(c => {
+          newResults[c.id] = { summary, time_ms: 0, tool_name: c.name || '', data: null, interrupted: true }
+        })
+        session.messages.splice(msgIdx, 1, { ...msg, results: newResults })
+        changed = true
+      })
+    }
+    if (changed) saveSessions()
+  }
+
+  // Remove all messages from fromIndex onward (used by "regenerate" to roll
+  // back to just before the last user message).
+  function truncateMessages(sessionId, fromIndex) {
+    const session = sessions.value[sessionId]
+    if (!session) return
+    session.messages.splice(fromIndex)
+    session.updatedAt = Date.now()
+    saveSessions()
+  }
+
+  // 编辑用户消息并创建版本分支：
+  // 旧内容 + 后续对话存为当前历史版本，新内容作为最新版本（新分支），截断后续消息
+  function branchUserMessage(sessionId, messageIdx, newContent) {
+    const session = sessions.value[sessionId]
+    if (!session) return
+    const msg = session.messages[messageIdx]
+    if (!msg || msg.role !== 'user') return
+    const followUps = session.messages.slice(messageIdx + 1)
+    if (msg.versions && msg.versions.length > 0) {
+      // 保存当前活跃分支的现场
+      msg.versions[msg.activeVersion ?? msg.versions.length - 1] = { content: msg.content, followUps }
+    } else {
+      msg.versions = [{ content: msg.content, followUps }]
+    }
+    msg.versions.push({ content: newContent, followUps: [] })
+    msg.activeVersion = msg.versions.length - 1
+    // 用新对象替换以触发 v-memo 失效
+    const updated = { ...msg, content: newContent, timestamp: Date.now() }
+    session.messages.splice(messageIdx, 1, updated)
+    session.messages.splice(messageIdx + 1)
+    session.updatedAt = Date.now()
+    saveSessions()
+  }
+
+  // 在编辑分支之间切换：保存当前分支现场，恢复目标分支（含其后续对话）
+  function switchUserVersion(sessionId, messageIdx, delta) {
+    const session = sessions.value[sessionId]
+    if (!session) return
+    const msg = session.messages[messageIdx]
+    if (!msg?.versions?.length) return
+    const cur = msg.activeVersion ?? msg.versions.length - 1
+    const next = Math.max(0, Math.min(msg.versions.length - 1, cur + delta))
+    if (next === cur) return
+    // 保存当前分支现场
+    msg.versions[cur] = { content: msg.content, followUps: session.messages.slice(messageIdx + 1) }
+    // 恢复目标分支
+    const target = msg.versions[next]
+    const updated = { ...msg, content: target.content, activeVersion: next }
+    session.messages.splice(messageIdx + 1)
+    session.messages.splice(messageIdx, 1, updated)
+    if (target.followUps?.length) {
+      session.messages.splice(messageIdx + 1, 0, ...target.followUps)
+    }
+    session.updatedAt = Date.now()
+    saveSessions()
   }
 
   async function mergeLocalToServer() {
@@ -394,6 +475,10 @@ export const useSessionStore = defineStore('sessions', () => {
     addThinkingMessageTo,
     addToolCallMessage,
     updateToolCallResult,
+    finalizePendingToolCalls,
+    truncateMessages,
+    branchUserMessage,
+    switchUserVersion,
     saveSessions,
     getBackendSessionId,
     loadSessions,

@@ -16,6 +16,7 @@ static/
 *.log
 .playwright-cli/
 backend/.playwright-cli/
+output/
 .gitnexus
 .claude/
 .codebuddy/

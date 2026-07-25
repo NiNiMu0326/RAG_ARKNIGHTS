@@ -3,17 +3,14 @@ LangFuse tracing for Agent observability.
 Traces LLM calls, tool executions, and overall agent sessions.
 """
 
-import time
+import asyncio
+import base64
 import json
 import logging
-import functools
-from typing import Optional, Dict, Any, Callable
-from contextvars import ContextVar
+import time
+from typing import Dict
 
 logger = logging.getLogger(__name__)
-
-# Context variable to track current trace across async boundaries
-_current_trace: ContextVar[Optional[Dict]] = ContextVar("langfuse_trace", default=None)
 
 _langfuse_client = None
 
@@ -173,27 +170,182 @@ class AgentTrace:
                 pass
 
 
-def trace_agent_loop(func: Callable):
-    """Decorator for agent_loop that wraps the entire conversation with a trace."""
+# ── LangFuse Public API client ──────────────────────────────────────────────
 
-    @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        session_id = kwargs.get("session_id", args[0] if args else "unknown")
-        user_message = kwargs.get("user_message", args[1] if len(args) > 1 else "")
-        model_id = kwargs.get("model_id", "default")
+def _langfuse_auth_header() -> str:
+    """Build the Basic Auth header for LangFuse Public API."""
+    from backend import config
+    credentials = f"{config.LANGFUSE_PUBLIC_KEY}:{config.LANGFUSE_SECRET_KEY}"
+    encoded = base64.b64encode(credentials.encode()).decode()
+    return f"Basic {encoded}"
 
-        trace = AgentTrace(session_id, user_message, model_id)
-        _current_trace.set(trace)
 
+def _langfuse_api_url(path: str) -> str:
+    """Build a full LangFuse Public API URL."""
+    from backend import config
+    host = config.LANGFUSE_HOST.rstrip("/")
+    return f"{host}/api/public{path}"
+
+
+async def fetch_langfuse_traces(page: int = 1, limit: int = 20,
+                                 name: str = None, user_id: str = None) -> dict:
+    """Fetch a paginated list of traces from LangFuse.
+
+    Uses the LangFuse Public API (GET /api/public/traces).
+    Returns {"traces": [...], "total": int, "page": int, "limit": int} or an error dict.
+    """
+    from backend import config
+    if not config.LANGFUSE_ENABLED:
+        return {"error": "LangFuse 未配置", "traces": [], "total": 0}
+
+    url = _langfuse_api_url("/traces")
+    params = {"page": page, "limit": limit, "orderBy": "timestamp.desc"}
+    if name:
+        params["name"] = name
+    if user_id:
+        params["user_id"] = user_id
+
+    headers = {"Authorization": _langfuse_auth_header()}
+
+    try:
+        import requests as _requests
+        resp = await asyncio.to_thread(
+            _requests.get, url, params=params, headers=headers, timeout=15
+        )
+        if resp.status_code == 401:
+            return {"error": "LangFuse 认证失败，请检查 API Key", "traces": [], "total": 0}
+        resp.raise_for_status()
+        data = resp.json()
+        traces = data.get("data", [])
+        meta = data.get("meta", {})
+        return {
+            "traces": [
+                {
+                    "id": t.get("id"),
+                    "name": t.get("name"),
+                    "userId": t.get("userId"),
+                    "sessionId": t.get("sessionId"),
+                    "timestamp": t.get("timestamp"),
+                    "input": str(t.get("input", ""))[:200] if t.get("input") else "",
+                    "output": str(t.get("output", ""))[:200] if t.get("output") else "",
+                    "metadata": t.get("metadata", {}),
+                    "latency": t.get("latency"),
+                    "totalCost": t.get("totalCost"),
+                    "environment": t.get("environment"),
+                }
+                for t in traces
+            ],
+            "total": meta.get("totalItems", len(traces)),
+            "page": meta.get("page", page),
+            "limit": limit,
+        }
+    except Exception as e:
+        logger.warning(f"[LANGFUSE] Failed to fetch traces: {e}")
+        return {"error": f"获取 LangFuse trace 列表失败: {e}", "traces": [], "total": 0}
+
+
+async def fetch_langfuse_trace_detail(trace_id: str) -> dict:
+    """Fetch a single trace with full detail from LangFuse.
+
+    Uses GET /api/public/traces/{id}.
+    """
+    from backend import config
+    if not config.LANGFUSE_ENABLED:
+        return {"error": "LangFuse 未配置"}
+
+    url = _langfuse_api_url(f"/traces/{trace_id}")
+    headers = {"Authorization": _langfuse_auth_header()}
+
+    try:
+        import requests as _requests
+        resp = await asyncio.to_thread(
+            _requests.get, url, headers=headers, timeout=15
+        )
+        if resp.status_code == 404:
+            return {"error": "Trace 不存在"}
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Parse observations (spans/generations)
+        observations = data.get("observations", [])
+        spans = []
+        generations = []
+        for obs in observations:
+            if obs.get("type") == "SPAN":
+                spans.append({
+                    "id": obs.get("id"),
+                    "name": obs.get("name"),
+                    "startTime": obs.get("startTime"),
+                    "endTime": obs.get("endTime"),
+                    "latency": obs.get("latency"),
+                    "input": str(obs.get("input", ""))[:300] if obs.get("input") else "",
+                    "output": str(obs.get("output", ""))[:300] if obs.get("output") else "",
+                    "metadata": obs.get("metadata", {}),
+                    "level": obs.get("level"),
+                })
+            elif obs.get("type") == "GENERATION":
+                generations.append({
+                    "id": obs.get("id"),
+                    "name": obs.get("name"),
+                    "model": obs.get("model"),
+                    "startTime": obs.get("startTime"),
+                    "endTime": obs.get("endTime"),
+                    "latency": obs.get("latency"),
+                    "input": str(obs.get("input", ""))[:300] if obs.get("input") else "",
+                    "output": str(obs.get("output", ""))[:300] if obs.get("output") else "",
+                    "usage": obs.get("usage", {}),
+                    "metadata": obs.get("metadata", {}),
+                })
+
+        return {
+            "id": data.get("id"),
+            "name": data.get("name"),
+            "userId": data.get("userId"),
+            "sessionId": data.get("sessionId"),
+            "timestamp": data.get("timestamp"),
+            "input": str(data.get("input", ""))[:500] if data.get("input") else "",
+            "output": str(data.get("output", ""))[:500] if data.get("output") else "",
+            "metadata": data.get("metadata", {}),
+            "latency": data.get("latency"),
+            "totalCost": data.get("totalCost"),
+            "environment": data.get("environment"),
+            "spans": spans,
+            "generations": generations,
+        }
+    except Exception as e:
+        logger.warning(f"[LANGFUSE] Failed to fetch trace detail: {e}")
+        return {"error": f"获取 LangFuse trace 详情失败: {e}"}
+
+
+async def save_trace_to_db(
+    session_id: str,
+    user_message: str,
+    model_id: str,
+    total_rounds: int,
+    total_time_ms: float,
+    total_llm_calls: int,
+    total_tool_calls: int,
+    total_tokens: int,
+    answer_length: int,
+    status: str = "success",
+    error: str = "",
+):
+    """Save a completed agent trace to the local SQLite database."""
+    try:
+        from backend.db import get_db
+        db = await get_db()
         try:
-            async for event in func(*args, **kwargs):
-                yield event
+            await db.execute(
+                """INSERT INTO traces (session_id, user_message, model_id, total_rounds,
+                   total_time_ms, total_llm_calls, total_tool_calls, total_tokens,
+                   answer_length, status, error)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, user_message[:500], model_id, total_rounds, total_time_ms,
+                 total_llm_calls, total_tool_calls, total_tokens, answer_length, status, error)
+            )
+            await db.commit()
         finally:
-            _current_trace.set(None)
-
-    return wrapper
-
-
-def get_current_trace() -> Optional[AgentTrace]:
-    """Get the current trace from context."""
-    return _current_trace.get()
+            await db.close()
+        logger.info(f"[TRACE] Saved trace for session={session_id} status={status}")
+    except Exception as e:
+        logger.warning(f"[TRACE] Failed to save trace to DB: {e}")

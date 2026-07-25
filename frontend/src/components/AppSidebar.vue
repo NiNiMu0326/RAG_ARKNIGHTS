@@ -127,8 +127,8 @@
 
     <div class="sidebar-footer">
       <div class="sidebar-status">
-        <span class="status-dot"></span>
-        <span class="status-text">System Online</span>
+        <span class="status-dot" :class="{ offline: !systemOnline }"></span>
+        <span class="status-text">{{ systemOnline ? 'System Online' : 'System Offline' }}</span>
       </div>
     </div>
 
@@ -168,18 +168,18 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSessionStore } from '../stores/sessions'
 import { useAuthStore } from '../stores/auth'
-import { useGraphController } from '../composables/useGraphController'
-import { isEntitiesEmpty } from '../composables/useGraphController'
-import { formatTime } from '../api'
+import { useGraphController, isEntitiesEmpty } from '../composables/useGraphController'
+import { api, formatTime } from '../api'
 
 const route = useRoute()
 const sessionStore = useSessionStore()
 const authStore = useAuthStore()
 const gc = useGraphController()
 
+// 通知 App.vue 关闭移动端侧边栏（由其 sidebarOpen 状态统一驱动 DOM，
+// 不要直接操作 DOM class，否则 Vue 状态与实际显示会失步）
 function closeMobileMenu() {
-  document.querySelector('.sidebar')?.classList.remove('mobile-open')
-  document.querySelector('.mobile-overlay')?.classList.remove('active')
+  window.dispatchEvent(new CustomEvent('close-mobile-sidebar'))
 }
 
 // Auto-close mobile sidebar on route change
@@ -235,11 +235,30 @@ onMounted(() => {
   }
   // Listen for auth changes to sync sessions
   window.addEventListener('auth-changed', _authChangedHandler)
+  checkSystemHealth()
+  healthTimerId = setInterval(checkSystemHealth, 30000)
 })
 
 onUnmounted(() => {
   window.removeEventListener('auth-changed', _authChangedHandler)
+  if (healthTimerId !== null) {
+    clearInterval(healthTimerId)
+    healthTimerId = null
+  }
 })
+
+// 底部状态点：基于后端 /status 的真实健康检查，每 30s 轮询
+const systemOnline = ref(true)
+let healthTimerId = null
+
+async function checkSystemHealth() {
+  try {
+    const res = await api.getStatus()
+    systemOnline.value = !!res
+  } catch {
+    systemOnline.value = false
+  }
+}
 
 function promptRename(sessionId) {
   renameTargetId.value = sessionId
@@ -255,12 +274,6 @@ function confirmRename() {
 }
 
 function confirmDelete(sessionId) {
-  if (Object.keys(sessionStore.sessions).length <= 1) {
-    deleteTargetName.value = sessionStore.sessions[sessionId]?.name || '该会话'
-    deleteTargetId.value = sessionId
-    showDeleteModal.value = true
-    return
-  }
   deleteTargetName.value = sessionStore.sessions[sessionId]?.name || '该会话'
   deleteTargetId.value = sessionId
   showDeleteModal.value = true
@@ -274,6 +287,22 @@ function executeDelete() {
   deleteTargetId.value = null
   deleteTargetName.value = ''
 }
+
+// 删除弹窗打开时，按 Enter 触发删除
+function onDeleteModalKeydown(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    executeDelete()
+  }
+}
+
+watch(showDeleteModal, (val) => {
+  if (val) {
+    document.addEventListener('keydown', onDeleteModalKeydown)
+  } else {
+    document.removeEventListener('keydown', onDeleteModalKeydown)
+  }
+})
 </script>
 
 <style scoped>

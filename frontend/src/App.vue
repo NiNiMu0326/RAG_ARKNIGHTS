@@ -5,9 +5,11 @@
     <main class="main-content">
       <AppHeader @toggle-sidebar="sidebarOpen = !sidebarOpen" />
       <router-view v-slot="{ Component }">
-        <keep-alive>
-          <component :is="Component" />
-        </keep-alive>
+        <transition name="fade" mode="out-in">
+          <keep-alive>
+            <component :is="Component" />
+          </keep-alive>
+        </transition>
       </router-view>
     </main>
     <SettingsModal @openAuth="openAuthModal" />
@@ -18,7 +20,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useSettingsStore } from './stores/settings'
 import { useAuthStore } from './stores/auth'
 import AppSidebar from './components/AppSidebar.vue'
@@ -55,6 +57,32 @@ onMounted(async () => {
       window.dispatchEvent(new CustomEvent('auth-changed'))
     }
   }
+})
+
+// ESC 关闭最上层的弹窗/抽屉：向最上层可见的 overlay 派发一次自身点击，
+// 复用各组件已有的 @click.self 关闭逻辑，无需逐个改造弹窗组件
+function onGlobalKeydown(e) {
+  if (e.key !== 'Escape') return
+  const overlays = document.querySelectorAll('.modal-overlay.active, .source-drawer-overlay.active')
+  if (overlays.length === 0) return
+  const topmost = overlays[overlays.length - 1]
+  topmost.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
+// 侧边栏（AppSidebar）通过此事件请求关闭移动端菜单，
+// 保证 sidebarOpen 状态与 DOM 始终同步（不直接操作 DOM class）
+function onCloseMobileSidebar() {
+  sidebarOpen.value = false
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onGlobalKeydown)
+  window.addEventListener('close-mobile-sidebar', onCloseMobileSidebar)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onGlobalKeydown)
+  window.removeEventListener('close-mobile-sidebar', onCloseMobileSidebar)
 })
 </script>
 

@@ -6,6 +6,7 @@ import asyncio
 import sys
 import os
 import json
+import random
 import time
 import logging
 from datetime import datetime, timezone
@@ -18,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 from starlette.types import ASGIApp, Scope, Receive, Send, Message
@@ -51,12 +52,44 @@ from backend.agent.core import agent_loop
 from backend.api.llm_factory import get_available_models, DEFAULT_MODEL
 
 # ============== Lifespan ==============
+
+TRACE_RETENTION_DAYS = 30  # 本地 trace 保留时长，超期自动清理
+
+
+async def _cleanup_old_traces():
+    """删除超过保留期的本地 traces（trace 是运维观测数据，生命周期独立于会话）。"""
+    try:
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "DELETE FROM traces WHERE created_at < datetime('now', ?)",
+                (f"-{TRACE_RETENTION_DAYS} days",)
+            )
+            await db.commit()
+            deleted = cursor.rowcount
+        finally:
+            await db.close()
+        if deleted:
+            logger.info(f"[TRACE] Retention cleanup: deleted {deleted} traces older than {TRACE_RETENTION_DAYS} days")
+    except Exception as e:
+        logger.warning(f"[TRACE] Retention cleanup failed: {e}")
+
+
+async def _trace_retention_loop():
+    """启动时清理一次，之后每 24 小时清理一次。"""
+    while True:
+        await _cleanup_old_traces()
+        await asyncio.sleep(24 * 3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not config.SILICONFLOW_API_KEY:
         raise RuntimeError("SILICONFLOW_API_KEY 环境变量未设置，拒绝启动。请在 .env 中配置。")
     await init_db()
+    retention_task = asyncio.create_task(_trace_retention_loop())
     yield
+    retention_task.cancel()
 
 
 # ============== FastAPI App ==============
@@ -136,6 +169,51 @@ app.add_middleware(RequestLoggingMiddleware)
 
 # AgenticRAG Session Manager (singleton)
 _session_manager = SessionManager(max_sessions=1000, ttl_seconds=3600)
+
+
+async def _build_tool_trace_from_session(session_id: str, include_ids: bool = False) -> List[Dict]:
+    """从内存会话中重建工具调用链（trace 详情/导出/调试端点共用）。
+
+    Args:
+        session_id: 会话 ID
+        include_ids: 是否包含 tool_call_id / id 字段（详情与调试用，导出文件不需要）
+    """
+    session = await _session_manager.get_session(session_id)
+    if not session:
+        return []
+    tool_trace = []
+    for msg in session.messages:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                fn = tc.get("function", {})
+                entry: Dict[str, Any] = {
+                    "type": "tool_call",
+                    "name": fn.get("name", ""),
+                    "arguments": fn.get("arguments", ""),
+                }
+                if include_ids:
+                    entry["id"] = tc.get("id", "")
+                tool_trace.append(entry)
+        elif msg.get("role") == "tool":
+            entry = {
+                "type": "tool_result",
+                "content": str(msg.get("content", ""))[:500],
+            }
+            if include_ids:
+                entry["tool_call_id"] = msg.get("tool_call_id", "")
+            tool_trace.append(entry)
+    return tool_trace
+
+
+async def _get_last_assistant_answer(session_id: str, max_len: int = 4000) -> str:
+    """取会话中最后一条 assistant 文本消息（trace 详情用）。会话过期时返回空串。"""
+    session = await _session_manager.get_session(session_id)
+    if not session:
+        return ""
+    for msg in reversed(session.messages):
+        if msg.get("role") == "assistant" and msg.get("content"):
+            return str(msg["content"])[:max_len]
+    return ""
 
 
 # ===== Entity Relations Cache =====
@@ -518,6 +596,7 @@ async def delete_conversation(session_id: str, user: dict = Depends(get_current_
             raise HTTPException(status_code=404, detail="会话不存在")
         await db.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
         await db.execute("DELETE FROM conversations WHERE session_id = ?", (session_id,))
+        # 注意：不删除 traces —— trace 是全局运维观测数据，生命周期独立于用户会话
         await db.commit()
         return {"status": "ok"}
     finally:
@@ -610,7 +689,7 @@ async def get_session_messages(session_id: str):
 
 @app.delete("/agent/session/{session_id}")
 async def delete_agent_session(session_id: str):
-    """Delete a session."""
+    """Delete a session (traces 保留，作为运维观测数据独立存在)。"""
     await _session_manager.delete_session(session_id)
     return {"status": "ok"}
 
@@ -621,26 +700,7 @@ async def get_agent_debug_trace(session_id: str):
     session = await _session_manager.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found or expired")
-
-    traces = []
-    for msg in session.messages:
-        if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            for tc in msg["tool_calls"]:
-                fn = tc.get("function", {})
-                traces.append({
-                    "type": "tool_call",
-                    "id": tc.get("id", ""),
-                    "name": fn.get("name", ""),
-                    "arguments": fn.get("arguments", ""),
-                })
-        elif msg.get("role") == "tool":
-            traces.append({
-                "type": "tool_result",
-                "tool_call_id": msg.get("tool_call_id", ""),
-                "content": msg.get("content", "")[:500],
-            })
-
-    return {"traces": traces}
+    return {"traces": await _build_tool_trace_from_session(session_id, include_ids=True)}
 
 
 @app.get("/agent/stats")
@@ -663,13 +723,250 @@ async def get_agent_models():
 
 
 @app.get("/agent/traces")
-async def get_agent_traces():
-    """Get LangFuse observability status and link."""
-    return {
-        "enabled": config.LANGFUSE_ENABLED,
-        "host": config.LANGFUSE_HOST if config.LANGFUSE_ENABLED else "",
-        "message": "LangFuse 已配置，请访问 LangFuse 控制台查看完整 Trace" if config.LANGFUSE_ENABLED else "LangFuse 未配置，请在 .env 中设置 LANGFUSE_PUBLIC_KEY 和 LANGFUSE_SECRET_KEY",
-    }
+async def get_agent_traces(page: int = 1, limit: int = 20,
+                           status: str = None, model_id: str = None, q: str = None):
+    """Get paginated local agent traces with optional filters.
+
+    - status: exact match on status (success / error / loop_detected / max_rounds)
+    - model_id: exact match on model_id
+    - q: keyword fuzzy match on user_message
+    """
+    try:
+        db = await get_db()
+        try:
+            where_clauses = []
+            filter_params = []
+            if status:
+                where_clauses.append("status = ?")
+                filter_params.append(status)
+            if model_id:
+                where_clauses.append("model_id = ?")
+                filter_params.append(model_id)
+            if q:
+                where_clauses.append("user_message LIKE ?")
+                filter_params.append(f"%{q}%")
+            where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+            offset = (page - 1) * limit
+            rows = await db.execute(
+                f"""SELECT id, session_id, user_message, model_id, total_rounds,
+                   total_time_ms, total_llm_calls, total_tool_calls, total_tokens,
+                   answer_length, status, error, created_at
+                   FROM traces{where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+                (*filter_params, limit, offset)
+            )
+            traces = [dict(r) for r in await rows.fetchall()]
+            # Get total count (with same filters)
+            count_row = await db.execute(f"SELECT COUNT(*) as cnt FROM traces{where_sql}", filter_params)
+            total = (await count_row.fetchone())["cnt"]
+        finally:
+            await db.close()
+        return {
+            "traces": traces,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "langfuse_enabled": config.LANGFUSE_ENABLED,
+            "langfuse_host": config.LANGFUSE_HOST if config.LANGFUSE_ENABLED else "",
+        }
+    except Exception as e:
+        return {
+            "traces": [],
+            "total": 0,
+            "page": 1,
+            "limit": limit,
+            "error": str(e),
+            "langfuse_enabled": config.LANGFUSE_ENABLED,
+            "langfuse_host": config.LANGFUSE_HOST if config.LANGFUSE_ENABLED else "",
+        }
+
+
+async def _export_traces_payload(trace_ids: Optional[List[int]] = None) -> JSONResponse:
+    """构建 traces 导出的 JSON 响应（选中导出与全部导出共用）。"""
+    db = await get_db()
+    try:
+        if trace_ids:
+            placeholders = ",".join("?" * len(trace_ids))
+            rows = await db.execute(
+                f"SELECT * FROM traces WHERE id IN ({placeholders}) ORDER BY created_at DESC",
+                trace_ids
+            )
+        else:
+            rows = await db.execute("SELECT * FROM traces ORDER BY created_at DESC")
+        traces = [dict(r) for r in await rows.fetchall()]
+    finally:
+        await db.close()
+
+    for t in traces:
+        try:
+            t["tool_trace"] = await _build_tool_trace_from_session(t["session_id"])
+        except Exception:
+            t["tool_trace"] = []
+
+    return JSONResponse(
+        content={"exported_at": datetime.now().isoformat(), "total": len(traces), "traces": traces},
+        headers={"Content-Disposition": "attachment; filename=arknights_traces.json"}
+    )
+
+
+@app.post("/agent/traces/export")
+async def export_selected_traces(request: Request):
+    """Export selected (or all) local traces as a JSON file download.
+    Request body (optional): {"trace_ids": [1, 2, 3]}
+    """
+    body = await request.json()
+    trace_ids = body.get("trace_ids") if body else None
+    try:
+        return await _export_traces_payload(trace_ids)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/agent/traces")
+async def delete_selected_traces(request: Request):
+    """Delete selected local traces by IDs.
+    Request body: {"trace_ids": [1, 2, 3]}
+    """
+    body = await request.json()
+    trace_ids = body.get("trace_ids", [])
+    if not trace_ids:
+        raise HTTPException(status_code=400, detail="trace_ids is required")
+    db = await get_db()
+    try:
+        placeholders = ",".join("?" * len(trace_ids))
+        cursor = await db.execute(
+            f"DELETE FROM traces WHERE id IN ({placeholders})",
+            trace_ids
+        )
+        await db.commit()
+        return {"status": "ok", "deleted": cursor.rowcount}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await db.close()
+
+
+@app.get("/agent/traces/export")
+async def export_all_traces():
+    """Export all local traces as a JSON file download."""
+    try:
+        return await _export_traces_payload()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/agent/traces/langfuse")
+async def get_langfuse_traces(page: int = 1, limit: int = 20):
+    """Proxy: fetch paginated traces from LangFuse Public API."""
+    from backend.observability.tracing import fetch_langfuse_traces
+    return await fetch_langfuse_traces(page=page, limit=limit)
+
+
+@app.get("/agent/traces/summary")
+async def get_agent_traces_summary():
+    """Aggregated stats over local traces (for the observability dashboard)."""
+    try:
+        db = await get_db()
+        try:
+            row = await db.execute(
+                """SELECT COUNT(*) as total,
+                   COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) as error_count,
+                   COALESCE(SUM(CASE WHEN date(created_at) = date('now') THEN 1 ELSE 0 END), 0) as today_count,
+                   COALESCE(AVG(total_time_ms), 0) as avg_time_ms,
+                   COALESCE(AVG(total_tokens), 0) as avg_tokens,
+                   COALESCE(AVG(total_rounds), 0) as avg_rounds,
+                   COALESCE(SUM(total_tool_calls), 0) as total_tool_calls,
+                   COALESCE(SUM(total_tokens), 0) as total_tokens
+                   FROM traces"""
+            )
+            agg = dict(await row.fetchone())
+
+            status_rows = await db.execute("SELECT status, COUNT(*) as cnt FROM traces GROUP BY status")
+            by_status = {r["status"]: r["cnt"] for r in await status_rows.fetchall()}
+
+            model_rows = await db.execute(
+                "SELECT model_id, COUNT(*) as cnt FROM traces GROUP BY model_id ORDER BY cnt DESC"
+            )
+            by_model = [{"model_id": r["model_id"], "count": r["cnt"]} for r in await model_rows.fetchall()]
+        finally:
+            await db.close()
+
+        total = agg["total"] or 0
+        return {
+            "total": total,
+            "today": agg["today_count"],
+            "error_count": agg["error_count"],
+            "error_rate": (agg["error_count"] / total) if total > 0 else 0,
+            "avg_time_ms": agg["avg_time_ms"],
+            "avg_tokens": agg["avg_tokens"],
+            "avg_rounds": agg["avg_rounds"],
+            "total_tool_calls": agg["total_tool_calls"],
+            "total_tokens": agg["total_tokens"],
+            "by_status": by_status,
+            "by_model": by_model,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/agent/traces/{trace_id}")
+async def get_agent_trace_detail(trace_id: int):
+    """Get detailed trace info including tool call chain."""
+    db = await get_db()
+    try:
+        row = await db.execute("SELECT * FROM traces WHERE id = ?", (trace_id,))
+        trace = await row.fetchone()
+        if not trace:
+            raise HTTPException(status_code=404, detail="Trace not found")
+        trace_dict = dict(trace)
+    finally:
+        await db.close()
+
+    # Get tool call trace + final answer from session messages (if session still exists)
+    try:
+        trace_dict["tool_trace"] = await _build_tool_trace_from_session(
+            trace_dict["session_id"], include_ids=True
+        )
+        trace_dict["answer"] = await _get_last_assistant_answer(trace_dict["session_id"])
+    except Exception:
+        trace_dict["tool_trace"] = []
+        trace_dict["answer"] = ""
+    return trace_dict
+
+
+@app.get("/agent/traces/{trace_id}/export")
+async def export_single_trace(trace_id: int):
+    """Export a single trace as a JSON file download."""
+    db = await get_db()
+    try:
+        row = await db.execute("SELECT * FROM traces WHERE id = ?", (trace_id,))
+        trace = await row.fetchone()
+        if not trace:
+            raise HTTPException(status_code=404, detail="Trace not found")
+        trace_dict = dict(trace)
+    finally:
+        await db.close()
+
+    # Enrich with tool trace
+    try:
+        trace_dict["tool_trace"] = await _build_tool_trace_from_session(trace_dict["session_id"])
+    except Exception:
+        trace_dict["tool_trace"] = []
+
+    return JSONResponse(
+        content=trace_dict,
+        headers={"Content-Disposition": f"attachment; filename=trace_{trace_id}.json"}
+    )
+
+
+@app.get("/agent/traces/langfuse/{trace_id}")
+async def get_langfuse_trace_detail(trace_id: str):
+    """Proxy: fetch a single trace with full detail from LangFuse."""
+    from backend.observability.tracing import fetch_langfuse_trace_detail
+    result = await fetch_langfuse_trace_detail(trace_id)
+    if "error" in result and not any(k in result for k in ("traces", "id")):
+        raise HTTPException(status_code=502, detail=result.get("error"))
+    return result
 
 
 # ============== Data Endpoints ==============
@@ -779,7 +1076,6 @@ def _load_qq_data():
 def _pick_excluding(candidates: list, label_suffix: str, exclude_labels: set, key=lambda x: x) -> Optional[str]:
     """Pick a random item from candidates whose derived label is not in exclude_labels.
     Tries up to 20 times, then falls back to random choice."""
-    import random
     for _ in range(20):
         chosen = random.choice(candidates)
         label = f"{key(chosen)}{label_suffix}"
@@ -793,8 +1089,6 @@ def _pick_excluding(candidates: list, label_suffix: str, exclude_labels: set, ke
 @app.get("/quick-questions")
 async def get_quick_questions(refresh: bool = False):
     """生成5个快速问题，基于GraphRAG图数据和别名信息。"""
-    import random
-
     global _quick_questions_cache, _quick_questions_cache_time, _qq_previous_labels
 
     now = time.time()

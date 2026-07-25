@@ -193,6 +193,7 @@ class DeepSeekClient:
         content_parts = []
         tool_calls_map = {}  # index -> {id, name, arguments_str}
         finish_reason = ""
+        usage_info = None  # token usage from final chunk
 
         # Streaming parser for <think/> tags embedded in content
         tag_parser = ThinkTagParser()
@@ -223,6 +224,9 @@ class DeepSeekClient:
                         continue
 
                     choices = chunk.get("choices", [])
+                    # Capture token usage from any chunk that has it (typically last chunk)
+                    if chunk.get("usage"):
+                        usage_info = chunk["usage"]
                     if not choices:
                         continue
 
@@ -305,6 +309,7 @@ class DeepSeekClient:
                 "tool_calls": tool_calls_list,
                 "content": full_content,
                 "reasoning_content": full_reasoning,
+                "usage": usage_info,
             }
         else:
             yield {
@@ -312,4 +317,5 @@ class DeepSeekClient:
                 "content": full_content,
                 "reasoning_content": full_reasoning,
                 "finish_reason": finish_reason,
+                "usage": usage_info,
             }

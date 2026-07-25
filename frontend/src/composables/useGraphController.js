@@ -60,7 +60,6 @@ export function useGraphController() {
       loading.value = true
       const data = await api.getGraphData()
       graphData.value = data
-      console.log('loadGraphData success, entities:', countEntities(data.entities), 'relations:', data.relations?.length)
       prepareRelationColors()
       updateStats()
     } catch (error) {
@@ -94,11 +93,8 @@ export function useGraphController() {
 
   // Node selection
   function addNodeSelection(nodeId) {
-    console.log('addNodeSelection called:', nodeId)
-    console.log('selectedNodes before:', [...selectedNodes.value])
     if (!selectedNodes.value.includes(nodeId)) {
       selectedNodes.value = [...selectedNodes.value, nodeId]
-      console.log('selectedNodes after:', [...selectedNodes.value])
     }
     searchQuery.value = ''
     searchResults.value = []
@@ -122,7 +118,6 @@ export function useGraphController() {
   function handleSearch(query) {
     searchQuery.value = query
     const entities = flattenEntities(graphData.value.entities)
-    console.log('handleSearch:', query, 'entities:', entities.length)
     if (!query || query.length < 1) {
       searchResults.value = [...entities].sort((a, b) => a.entity.localeCompare(b.entity))
     } else {
@@ -135,7 +130,6 @@ export function useGraphController() {
 
   function onSearchFocus() {
     searchFocused.value = true
-    console.log('onSearchFocus, searchFocused:', searchFocused.value, 'entities:', countEntities(graphData.value.entities))
     if (!searchQuery.value.trim()) {
       searchResults.value = flattenEntities(graphData.value.entities).sort((a, b) => a.entity.localeCompare(b.entity))
     }

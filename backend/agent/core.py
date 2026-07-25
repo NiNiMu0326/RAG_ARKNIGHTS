@@ -8,15 +8,14 @@ import time
 import asyncio
 import logging
 import re
-from typing import AsyncGenerator, Dict, List, Any, Optional, Tuple
+from typing import AsyncGenerator, Dict, List, Any, Tuple
 
-from backend.agent.sessions import Session, SessionManager
+from backend.agent.sessions import SessionManager
 from backend.agent.prompts import build_messages
 from backend.agent.tools import ToolRegistry, get_tool_registry
 from backend.api.deepseek import ToolCall, STREAM_EVENT_THINKING_DELTA, STREAM_EVENT_CONTENT_DELTA, STREAM_EVENT_TOOL_CALLS, STREAM_EVENT_DONE
 from backend.api.llm_factory import get_llm_client, get_model_info, DEFAULT_MODEL
-from backend import config
-from backend.observability.tracing import AgentTrace, get_current_trace, get_langfuse_client
+from backend.observability.tracing import AgentTrace, save_trace_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -356,6 +355,9 @@ async def agent_loop(
         if detect_loop(session.messages):
             logger.warning(f"[LOOP] Loop detected in session {session_id}")
             trace.end(error="loop_detected", total_rounds=round_num)
+            await save_trace_to_db(session_id, user_message, model_id, round_num,
+                                   (time.time() - loop_start) * 1000, trace.total_llm_calls,
+                                   trace.total_tool_calls, trace.total_tokens, 0, "loop_detected", "loop_detected")
             yield format_error("我在查找信息时陷入了循环，无法完成回答。请尝试更具体的问题。")
             return
 
@@ -371,6 +373,7 @@ async def agent_loop(
             tool_calls = None
             final_content = ""
             final_reasoning = ""
+            round_usage = None  # token usage for this round
             stream = client.chat_with_tools_stream(
                 messages=messages,
                 tools=tool_schemas,
@@ -394,6 +397,7 @@ async def agent_loop(
                     tool_calls = event["tool_calls"]
                     final_content = event.get("content", "")
                     final_reasoning = event.get("reasoning_content", "")
+                    round_usage = event.get("usage")
                     # Don't resend final_reasoning as thinking_delta —
                     # it was already streamed incrementally above
 
@@ -401,14 +405,19 @@ async def agent_loop(
                     # Model answered directly without tools
                     final_content = event.get("content", "")
                     final_reasoning = event.get("reasoning_content", "")
+                    round_usage = event.get("usage")
 
-            logger.info(f"[LLM RESPONSE] Round {round_num}: content_len={len(final_content)} tool_calls={len(tool_calls) if tool_calls else 0}")
+            logger.info(f"[LLM RESPONSE] Round {round_num}: content_len={len(final_content)} tool_calls={len(tool_calls) if tool_calls else 0} usage={round_usage}")
 
             # Record LLM generation in LangFuse trace
             llm_latency = (time.time() - llm_start) * 1000
+            input_tokens = round_usage.get("prompt_tokens", 0) if round_usage else 0
+            output_tokens = round_usage.get("completion_tokens", 0) if round_usage else 0
             trace.add_llm_generation(
                 round_num=round_num,
                 messages_count=len(messages),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 tool_calls_count=len(tool_calls) if tool_calls else 0,
                 latency_ms=llm_latency,
                 model=model_id,
@@ -416,6 +425,9 @@ async def agent_loop(
         except Exception as e:
             logger.error(f"[LLM ERROR] {model_info['display_name']} API call failed: {e}", exc_info=True)
             trace.end(error=str(e), total_rounds=round_num)
+            await save_trace_to_db(session_id, user_message, model_id, round_num,
+                                   (time.time() - loop_start) * 1000, trace.total_llm_calls,
+                                   trace.total_tool_calls, trace.total_tokens, 0, "error", str(e))
             yield format_error(f"AI 服务暂时不可用: {str(e)}")
             return
 
@@ -444,6 +456,9 @@ async def agent_loop(
                 total_time_ms=total_ms,
                 answer_length=len(clean_content),
             )
+            await save_trace_to_db(session_id, user_message, model_id, round_num - 1,
+                                   total_ms, trace.total_llm_calls, trace.total_tool_calls,
+                                   trace.total_tokens, len(clean_content), "success", "")
             # Filter to only sources the LLM actually cited in the answer
             cited_ids = _extract_cited_chunk_ids(clean_content)
             cited_sources = [s for s in collected_sources.values()
@@ -545,4 +560,7 @@ async def agent_loop(
     # Exceeded max rounds
     logger.warning(f"Max rounds ({max_rounds}) exceeded in session {session_id}")
     trace.end(error="max_rounds_exceeded", total_rounds=max_rounds)
+    await save_trace_to_db(session_id, user_message, model_id, max_rounds,
+                           (time.time() - loop_start) * 1000, trace.total_llm_calls,
+                           trace.total_tool_calls, trace.total_tokens, 0, "max_rounds", "max_rounds_exceeded")
     yield format_error("我无法在有限的步骤内完成回答，请尝试更具体的问题。")

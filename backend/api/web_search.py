@@ -7,20 +7,13 @@ import re
 import logging
 from typing import List, Dict
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
 from backend import config
+from backend.api.base import create_http_session
 
 logger = logging.getLogger(__name__)
 
 # Module-level session with connection pooling and retry
-_session = requests.Session()
-_retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
-_adapter = HTTPAdapter(max_retries=_retry, pool_connections=10, pool_maxsize=20)
-_session.mount("http://", _adapter)
-_session.mount("https://", _adapter)
+_session = create_http_session()
 
 
 def search(query: str, limit: int = 5) -> List[Dict[str, str]]:

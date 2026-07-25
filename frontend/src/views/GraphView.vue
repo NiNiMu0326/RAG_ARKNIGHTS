@@ -3,9 +3,23 @@
     <!-- Graph Container -->
     <div id="kg-graph" ref="graphContainer"></div>
 
+    <!-- Legend Panel -->
+    <div class="kg-legend-panel" v-if="currentNodeTypes.length > 0">
+      <div class="kg-legend-panel-title">图例</div>
+      <div class="kg-legend-panel-content">
+        <div v-for="type in currentNodeTypes" :key="type" class="kg-legend-item">
+          <span class="kg-legend-color" :style="{ background: nodeColors[type] || nodeColors.default }"></span>
+          <span>{{ type }}</span>
+        </div>
+        <div class="kg-legend-item">
+          <span class="kg-legend-border kg-legend-border-selected"></span>
+          <span>选中节点</span>
+        </div>
+      </div>
+    </div>
 
     <!-- Edge Info Panel -->
-    <div class="kg-edge-info" :class="{ active: controller.selectedEdge.value, 'is-hovered': edgeInfoHovered }" ref="edgeInfoEl">
+    <div class="kg-edge-info" :class="{ active: controller.selectedEdge.value }">
       <div class="kg-edge-info-header">
         <span class="kg-edge-info-title">关系详情</span>
         <button class="kg-edge-info-close" @click="controller.selectedEdge.value = null">X</button>
@@ -57,13 +71,14 @@ import { ref, onMounted, onUnmounted, onActivated, watch } from 'vue'
 import cytoscape from 'cytoscape'
 import { useGraphController } from '../composables/useGraphController'
 import { countEntities } from '../composables/useGraphController'
+import { useSettingsStore } from '../stores/settings'
 
 const controller = useGraphController()
+const settingsStore = useSettingsStore()
 
 const graphContainer = ref(null)
 const zoomLevel = ref(100)
-const edgeInfoHovered = ref(false)
-const edgeInfoEl = ref(null)
+const currentNodeTypes = ref([])
 
 let cy = null
 
@@ -81,22 +96,34 @@ const nodeColors = {
   'default': '#8ba3a0'
 }
 
-// Cytoscape styles
-const nodeStyles = [
-  { selector: 'node', style: { 'label': 'data(label)', 'text-valign': 'bottom', 'text-margin-y': 10, 'font-size': '14px', 'font-weight': '600', 'color': '#ffffff', 'text-background-color': '#1a1a2e', 'text-background-opacity': 0.85, 'text-background-padding': '4px', 'text-background-shape': 'roundrectangle', 'background-color': '#00e5cc', 'width': 'data(size)', 'height': 'data(size)', 'border-width': 3, 'border-color': '#00e5cc', 'opacity': 0.9 } },
-  { selector: 'node:selected', style: { 'border-width': 4, 'border-color': '#ffffff', 'opacity': 1 } },
-  { selector: 'node.selected-node', style: { 'border-width': 4, 'border-color': '#ffffff', 'opacity': 1, 'z-index': 10 } },
-  { selector: 'node.root-node', style: { 'border-width': 5, 'border-color': '#ffd700', 'opacity': 1, 'z-index': 20 } },
-  { selector: 'node.neighbor', style: { 'border-color': '#ffc107', 'border-width': 2 } }
-]
+// 从 CSS 变量读取主题色，让图谱文字/标签底随深浅主题切换
+function cssVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return v || fallback
+}
 
-const edgeStyles = [
-  { selector: 'edge', style: { 'width': 2, 'line-color': '#3a3a5a', 'target-arrow-color': '#3a3a5a', 'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'opacity': 0.4 } },
-  { selector: 'edge.highlighted', style: { 'width': 3, 'opacity': 1, 'z-index': 5 } },
-  { selector: 'edge.selected-relation', style: { 'width': 4, 'opacity': 1, 'z-index': 10, 'line-color': '#ffd700' } },
-  { selector: 'edge.relation-hovered', style: { 'width': 4, 'opacity': 1, 'z-index': 15 } },
-  { selector: 'edge.relation-dimmed', style: { 'opacity': 0.08 } }
-]
+// Cytoscape styles（每次 init 时基于当前主题重新计算）
+function buildCytoscapeStyles() {
+  const labelColor = cssVar('--text-primary', '#ffffff')
+  const labelBg = cssVar('--bg-panel', '#1a1a2e')
+  // 选中描边需与画布背景（--bg-deep）形成对比，故用主文本色
+  const selectedBorder = labelColor
+  const nodeStyles = [
+    { selector: 'node', style: { 'label': 'data(label)', 'text-valign': 'bottom', 'text-margin-y': 10, 'font-size': '14px', 'font-weight': '600', 'color': labelColor, 'text-background-color': labelBg, 'text-background-opacity': 0.9, 'text-background-padding': '4px', 'text-background-shape': 'roundrectangle', 'background-color': '#00e5cc', 'width': 'data(size)', 'height': 'data(size)', 'border-width': 3, 'border-color': '#00e5cc', 'opacity': 0.9 } },
+    { selector: 'node:selected', style: { 'border-width': 4, 'border-color': selectedBorder, 'opacity': 1 } },
+    { selector: 'node.selected-node', style: { 'border-width': 4, 'border-color': selectedBorder, 'opacity': 1, 'z-index': 10 } },
+    { selector: 'node.root-node', style: { 'border-width': 5, 'border-color': '#ffd700', 'opacity': 1, 'z-index': 20 } },
+    { selector: 'node.neighbor', style: { 'border-color': '#ffc107', 'border-width': 2 } }
+  ]
+  const edgeStyles = [
+    { selector: 'edge', style: { 'width': 2, 'line-color': '#3a3a5a', 'target-arrow-color': '#3a3a5a', 'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'opacity': 0.4 } },
+    { selector: 'edge.highlighted', style: { 'width': 3, 'opacity': 1, 'z-index': 5 } },
+    { selector: 'edge.selected-relation', style: { 'width': 4, 'opacity': 1, 'z-index': 10, 'line-color': '#ffd700' } },
+    { selector: 'edge.relation-hovered', style: { 'width': 4, 'opacity': 1, 'z-index': 15 } },
+    { selector: 'edge.relation-dimmed', style: { 'opacity': 0.08 } }
+  ]
+  return [...nodeStyles, ...edgeStyles]
+}
 
 // ============ Init ============
 function initGraph() {
@@ -104,9 +131,9 @@ function initGraph() {
 
   cy = cytoscape({
     container: graphContainer.value,
-    style: [...nodeStyles, ...edgeStyles],
+    style: buildCytoscapeStyles(),
     layout: { name: 'circle', padding: 50 },
-    wheelSensitivity: 3.0,
+    wheelSensitivity: 0.5,
     minZoom: 0.3,
     maxZoom: 3
   })
@@ -165,6 +192,7 @@ function updateGraph() {
   if (selectedNodes.value.length === 0) {
     cy.elements().remove()
     controller.updateCurrentStats(0, 0)
+    currentNodeTypes.value = []
     return
   }
 
@@ -193,6 +221,7 @@ function updateGraph() {
     applyEdgeStyles()
     applyEdgeHoverStyles()
     controller.updateCurrentStats(subgraph.nodes.length, subgraph.edges.length)
+    currentNodeTypes.value = [...new Set(subgraph.nodes.map(n => n.data.type))]
   }
 
   controller.selectedEdge.value = null
@@ -216,29 +245,21 @@ function buildSubgraph() {
 
         if (r.source === nodeId) {
           nextLevelNodes.add(r.target)
-          edges.push({
-            group: 'edges',
-            data: {
-              id: `edge-${r.source}-${r.target}-${r.relation}`,
-              source: r.source,
-              target: r.target,
-              relation: r.relation,
-              description: r.description || ''
-            }
-          })
         } else if (r.target === nodeId) {
           nextLevelNodes.add(r.source)
-          edges.push({
-            group: 'edges',
-            data: {
-              id: `edge-${r.source}-${r.target}-${r.relation}`,
-              source: r.source,
-              target: r.target,
-              relation: r.relation,
-              description: r.description || ''
-            }
-          })
+        } else {
+          return
         }
+        edges.push({
+          group: 'edges',
+          data: {
+            id: `edge-${r.source}-${r.target}-${r.relation}`,
+            source: r.source,
+            target: r.target,
+            relation: r.relation,
+            description: r.description || ''
+          }
+        })
       })
     })
 
@@ -306,7 +327,6 @@ function buildSubgraph() {
 
 function applyNodeStyles() {
   const { selectedNodes } = controller
-  const { relationColors } = controller
 
   cy.nodes().forEach(node => {
     const nodeId = node.id()
@@ -367,37 +387,17 @@ function applyEdgeHoverStyles() {
 }
 
 // ============ Zoom ============
+// zoomLevel 由 initGraph 中的 cy 'zoom' 事件统一更新，此处无需手动赋值
 function zoomIn() {
-  if (cy) {
-    cy.zoom(cy.zoom() * 1.2)
-    zoomLevel.value = Math.round((cy.zoom() || 1) * 100)
-  }
+  if (cy) cy.zoom(cy.zoom() * 1.2)
 }
 
 function zoomOut() {
-  if (cy) {
-    cy.zoom(cy.zoom() * 0.8)
-    zoomLevel.value = Math.round((cy.zoom() || 1) * 100)
-  }
+  if (cy) cy.zoom(cy.zoom() * 0.8)
 }
 
 function fitView() {
-  if (cy) {
-    cy.fit(undefined, 50)
-    zoomLevel.value = Math.round((cy.zoom() || 1) * 100)
-  }
-}
-
-// ============ Edge info hover detection ============
-function onMouseMove(e) {
-  if (!edgeInfoEl.value || !controller.selectedEdge.value) {
-    edgeInfoHovered.value = false
-    return
-  }
-  const rect = edgeInfoEl.value.getBoundingClientRect()
-  const inside = e.clientX >= rect.left && e.clientX <= rect.right &&
-                 e.clientY >= rect.top && e.clientY <= rect.bottom
-  edgeInfoHovered.value = inside
+  if (cy) cy.fit(undefined, 50)
 }
 
 // ============ Lifecycle ============
@@ -405,7 +405,6 @@ onMounted(async () => {
   initGraph()
   await controller.loadGraphData()
   updateGraph()
-  document.addEventListener('mousemove', onMouseMove)
 })
 
 // keep-alive 恢复时重建 cytoscape（DOM 已重建）
@@ -419,7 +418,6 @@ onActivated(() => {
 })
 
 onUnmounted(() => {
-  document.removeEventListener('mousemove', onMouseMove)
   if (cy) {
     cy.destroy()
     cy = null
@@ -436,6 +434,16 @@ watch(() => controller.hoveredRelation.value, applyEdgeHoverStyles)
 watch(() => controller.graphData.value, () => {
   updateGraph()
 })  // Re-render when graph data finishes loading (e.g. sidebar-triggered async load after activation)
+
+// 主题切换时重建图谱，让节点标签/描边颜色适配新主题
+watch(() => settingsStore.theme, () => {
+  if (cy) {
+    cy.destroy()
+    cy = null
+  }
+  initGraph()
+  updateGraph()
+})
 </script>
 
 <style scoped>
@@ -526,7 +534,7 @@ watch(() => controller.graphData.value, () => {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   opacity: 0;
   visibility: hidden;
   transform: translateY(-10px);
@@ -539,17 +547,8 @@ watch(() => controller.graphData.value, () => {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
-  pointer-events: none;
-  transition: all var(--transition-normal);
-}
-
-.kg-edge-info.active.is-hovered {
-  opacity: 0.4;
-}
-
-/* Only close button is clickable, everything else click-through to graph */
-.kg-edge-info .kg-edge-info-close {
   pointer-events: auto;
+  transition: all var(--transition-normal);
 }
 
 .kg-edge-info-header {
@@ -588,6 +587,8 @@ watch(() => controller.graphData.value, () => {
 
 .kg-edge-info-body {
   padding: var(--spacing-md);
+  user-select: text;
+  cursor: text;
 }
 
 .kg-edge-info-item {

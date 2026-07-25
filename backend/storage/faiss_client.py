@@ -24,6 +24,29 @@ class FAISSClientWrapper:
     def _meta_path(self, collection_name: str) -> Path:
         return self.index_dir / f"{collection_name}_meta.pkl"
 
+    @staticmethod
+    def _embed_documents(
+        documents: List[Document],
+        embedding_fn,
+        batch_size: int = 20,
+    ) -> List[List[float]]:
+        """Batch-embed documents (batch size 20 to avoid API 413)."""
+        embeddings = []
+        for i in range(0, len(documents), batch_size):
+            batch_docs = documents[i:i + batch_size]
+            texts = [d.page_content for d in batch_docs]
+            embeddings.extend(embedding_fn.embed_documents(texts))
+        return embeddings
+
+    @staticmethod
+    def _doc_to_meta_entry(doc: Document, internal_id: int) -> Dict:
+        """Build a metadata entry for one document."""
+        return {
+            "id": doc.metadata.get("chunk_id", f"doc_{internal_id}"),
+            "page_content": doc.page_content,
+            "metadata": dict(doc.metadata),
+        }
+
     def build_index(
         self,
         collection_name: str,
@@ -42,14 +65,7 @@ class FAISSClientWrapper:
         if embeddings is None:
             if embedding_fn is None:
                 raise ValueError("Either embeddings or embedding_fn must be provided")
-            # Batch embed (batch size 20 to avoid API 413)
-            batch_size = 20
-            embeddings = []
-            for i in range(0, len(documents), batch_size):
-                batch_docs = documents[i:i + batch_size]
-                texts = [d.page_content for d in batch_docs]
-                batch_emb = embedding_fn.embed_documents(texts)
-                embeddings.extend(batch_emb)
+            embeddings = self._embed_documents(documents, embedding_fn)
 
         import faiss
         dim = len(embeddings[0])
@@ -64,13 +80,10 @@ class FAISSClientWrapper:
         faiss.write_index(index, str(self._index_path(collection_name)))
 
         # Save metadata: id -> {page_content, metadata}
-        meta = {}
-        for i, doc in enumerate(documents):
-            meta[i] = {
-                "id": doc.metadata.get("chunk_id", f"doc_{i}"),
-                "page_content": doc.page_content,
-                "metadata": dict(doc.metadata),
-            }
+        meta = {
+            i: self._doc_to_meta_entry(doc, i)
+            for i, doc in enumerate(documents)
+        }
         with open(self._meta_path(collection_name), "wb") as f:
             pickle.dump(meta, f)
 
@@ -118,13 +131,7 @@ class FAISSClientWrapper:
         if embeddings is None:
             if embedding_fn is None:
                 raise ValueError("Either embeddings or embedding_fn must be provided")
-            batch_size = 20
-            embeddings = []
-            for i in range(0, len(documents), batch_size):
-                batch_docs = documents[i:i + batch_size]
-                texts = [d.page_content for d in batch_docs]
-                batch_emb = embedding_fn.embed_documents(texts)
-                embeddings.extend(batch_emb)
+            embeddings = self._embed_documents(documents, embedding_fn)
 
         # 加载已有索引
         result = self.load_index(collection_name)
@@ -144,11 +151,7 @@ class FAISSClientWrapper:
         # 追加 metadata
         for i, doc in enumerate(documents):
             new_id = old_count + i
-            meta[new_id] = {
-                "id": doc.metadata.get("chunk_id", f"doc_{new_id}"),
-                "page_content": doc.page_content,
-                "metadata": dict(doc.metadata),
-            }
+            meta[new_id] = self._doc_to_meta_entry(doc, new_id)
 
         # 保存
         faiss.write_index(index, str(self._index_path(collection_name)))

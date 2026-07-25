@@ -13,7 +13,7 @@
 - **地址**：119.147.202.190:14602
 - **SSH**：`ssh root@119.147.202.190 -p 14602`
 - **密码**：LLll11..
-- **Web 访问**：http://ninimu.top:14606
+- **Web 访问**：https://ninimu.top:14606（TLS 端口，明文 HTTP 会返回 400）
 - **项目路径**：服务器上项目位于 `/srv/projects/arknights-rag/`
 - **后端端口**：8889（uvicorn），通过 Nginx 代理到 14606
 
@@ -288,11 +288,22 @@ python backend/build_faiss_index.py
 ```
 ## 部署工作流
 
-本项目采用 **本地开发 → Git 推送 → 服务器拉取** 的工作流：
+本项目采用 **GitHub Actions CI/CD 自动化部署**：`git push` 到 `master` 即触发，无需人工登录服务器。
 
-1. **本地开发**：在本地 `D:\Agent\ARKNIGHTSAgent` 修改代码
-2. **Git 提交推送**：使用 `git add` + `git commit` + `git push` 推送到远程仓库
-3. **服务器部署**：SSH 登录服务器执行 `git pull` 拉取最新代码
+### 流程
+
+1. **Job 1 · 测试（CI）**：checkout → 安装依赖 → `pytest test/`（578 个测试）。失败则流程终止，服务器不受影响，GitHub 给 push 者发邮件。
+2. **Job 2 · 部署（CD）**：测试通过才执行，Runner 通过 SSH（密钥存 GitHub Secrets）在服务器上依次执行：
+   - `git pull` + `npm install` + `npm run build`（先构建，失败则旧服务继续运行）
+   - `pkill` 停止旧 uvicorn
+   - `nohup` 启动新 uvicorn + 内部健康检查（`localhost:8889`，30 秒重试窗口）
+   - 外部健康检查（`https://ninimu.top:14606/health`）
+
+- **配置文件**：`.github/workflows/ci-cd.yml`
+- **触发方式**：push 到 `master` 自动触发；也可在 GitHub Actions 页面手动触发（workflow_dispatch）
+- **耗时**：约 2 分钟；**并发控制**：`concurrency` 锁防止连续 push 部署冲突
+- **状态查看**：`gh run list`、`gh run view <id> --log-failed`，或 GitHub 仓库 Actions 页面
+- **GitHub Secrets**（部署凭据）：`SERVER_HOST` / `SERVER_PORT` / `SERVER_USER` / `SSH_PRIVATE_KEY`
 
 ### 服务器信息
 - **地址**：119.147.202.190:14602
@@ -300,25 +311,22 @@ python backend/build_faiss_index.py
 - **密码**：LLll11..
 - **项目路径**：`/srv/projects/arknights-rag/`
 
-### 部署命令示例
+### 应急手动部署（CI 不可用时）
 
 ```bash
-# 本地提交并推送
-git add -A
-git commit -m "[feat] 描述改动内容"
-git push origin main
-
-# 服务器拉取更新
 ssh root@119.147.202.190 -p 14602
 cd /srv/projects/arknights-rag/
 git pull
+cd frontend && npm install && npm run build && cd ..
+pkill -f uvicorn; sleep 1
+nohup python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8889 > /tmp/uvicorn.log 2>&1 &
 ```
 
 ### 注意事项
 - **Git 提交前必须征得用户同意**。不要自动提交改动，即使是为了部署到服务器。先告知用户改动内容，等用户确认后再执行 `git add` + `git commit`。用户可能需要在一次提交中包含多个修改。
 - 每次重要改动后必须 commit，commit message 使用中文描述
-- 推送到仓库后提醒用户到服务器执行 `git pull`，**拉取代码后必须重启 uvicorn 服务才能生效**
-- 重启命令：`ssh -p 14602 root@119.147.202.190 'pkill -f uvicorn; cd /srv/projects/arknights-rag && nohup python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8889 > /tmp/uvicorn.log 2>&1 &'`
+- **push 到 master 即自动部署**：测试通过后会自动完成构建、重启和健康检查，无需再 SSH 到服务器操作；如需暂不部署，先推送到其他分支
+- **测试环境适配**：CI 是干净 checkout（无 `data/`、`chunks/`、`faiss_index/`、`backend/.env`），测试不得依赖本地数据文件或真实 API Key；数据库表由 `test/conftest.py` 的 session fixture 自动初始化
 
 
 <!-- gitnexus:start -->

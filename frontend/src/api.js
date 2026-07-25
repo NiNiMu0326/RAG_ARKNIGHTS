@@ -173,8 +173,74 @@ export const api = {
     return response.json()
   },
 
-  async getTracesStatus() {
-    const response = await fetch(`${API_BASE}/agent/traces`)
+  async getTraces(page = 1, limit = 20, filters = {}) {
+    const params = new URLSearchParams({ page, limit })
+    if (filters.status) params.set('status', filters.status)
+    if (filters.modelId) params.set('model_id', filters.modelId)
+    if (filters.q) params.set('q', filters.q)
+    const response = await fetch(`${API_BASE}/agent/traces?${params}`)
+    return response.json()
+  },
+
+  async getTraceSummary() {
+    const response = await fetch(`${API_BASE}/agent/traces/summary`)
+    if (!response.ok) throw new Error('获取 trace 统计失败')
+    return response.json()
+  },
+
+  async getTraceDetail(traceId) {
+    const response = await fetch(`${API_BASE}/agent/traces/${traceId}`)
+    if (!response.ok) throw new Error('获取 trace 详情失败')
+    return response.json()
+  },
+
+  async deleteTraces(traceIds) {
+    const response = await fetch(`${API_BASE}/agent/traces`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify({ trace_ids: traceIds }),
+    })
+    if (!response.ok) throw new Error('删除失败')
+    return response.json()
+  },
+
+  /**
+   * 导出 traces 为 JSON 文件 Blob。传 ids 数组导出选中项，不传导出全部。
+   */
+  async exportTraces(traceIds = null) {
+    let response
+    if (traceIds && traceIds.length > 0) {
+      response = await fetch(`${API_BASE}/agent/traces/export`, {
+        method: 'POST',
+        headers: getAuthHeaders(true),
+        body: JSON.stringify({ trace_ids: traceIds }),
+      })
+    } else {
+      response = await fetch(`${API_BASE}/agent/traces/export`, {
+        headers: getAuthHeaders(),
+      })
+    }
+    if (!response.ok) throw new Error('导出失败')
+    return response.blob()
+  },
+
+  async exportSingleTrace(traceId) {
+    const response = await fetch(`${API_BASE}/agent/traces/${traceId}/export`, {
+      headers: getAuthHeaders(),
+    })
+    if (!response.ok) throw new Error('导出失败')
+    return response.blob()
+  },
+
+  // LangFuse traces (proxied)
+  async getLangfuseTraces(page = 1, limit = 20) {
+    const response = await fetch(`${API_BASE}/agent/traces/langfuse?page=${page}&limit=${limit}`)
+    return response.json()
+  },
+
+  async getLangfuseTraceDetail(traceId) {
+    const response = await fetch(`${API_BASE}/agent/traces/langfuse/${traceId}`)
+    if (!response.ok) throw new Error('获取 LangFuse trace 详情失败')
     return response.json()
   },
 
@@ -260,6 +326,7 @@ export const api = {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
+    const callbacks = { onNewSessionId, onThinkingStart, onThinkingDelta, onThinkingDone, onToolCallsStart, onToolExecuting, onToolCallResult, onAnswerDelta, onAnswerDone, onError }
 
     while (true) {
       const { done, value } = await reader.read()
@@ -276,7 +343,7 @@ export const api = {
 
         try {
           const event = JSON.parse(jsonStr)
-          _dispatchSSEEvent(event, { onNewSessionId, onThinkingStart, onThinkingDone, onToolCallsStart, onToolExecuting, onToolCallResult, onThinkingDelta, onAnswerDelta, onAnswerDone, onError })
+          _dispatchSSEEvent(event, callbacks)
         } catch (e) {
           console.warn('Failed to parse SSE event:', jsonStr, e)
         }
@@ -289,7 +356,7 @@ export const api = {
       if (jsonStr) {
         try {
           const event = JSON.parse(jsonStr)
-        _dispatchSSEEvent(event, { onNewSessionId, onThinkingStart, onThinkingDone, onToolCallsStart, onToolExecuting, onToolCallResult, onThinkingDelta, onAnswerDelta, onAnswerDone, onError })
+          _dispatchSSEEvent(event, callbacks)
         } catch (e) {
           console.warn('Failed to parse final SSE event:', jsonStr, e)
         }
@@ -319,6 +386,18 @@ export function formatTime(date) {
     minute: '2-digit',
     second: '2-digit'
   }).format(date)
+}
+
+/**
+ * 触发浏览器下载一个 Blob 文件
+ */
+export function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 export function debounce(fn, delay = 300) {

@@ -5,7 +5,6 @@ Supports: DeepSeek
 """
 
 import logging
-from typing import Optional
 
 from backend.api.deepseek import DeepSeekClient
 from backend import config

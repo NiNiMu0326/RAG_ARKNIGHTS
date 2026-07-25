@@ -53,5 +53,24 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
             CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at);
             CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
+
+            CREATE TABLE IF NOT EXISTS traces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                user_message TEXT NOT NULL DEFAULT '',
+                model_id TEXT NOT NULL DEFAULT '',
+                total_rounds INTEGER NOT NULL DEFAULT 0,
+                total_time_ms REAL NOT NULL DEFAULT 0,
+                total_llm_calls INTEGER NOT NULL DEFAULT 0,
+                total_tool_calls INTEGER NOT NULL DEFAULT 0,
+                total_tokens INTEGER NOT NULL DEFAULT 0,
+                answer_length INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'success',
+                error TEXT NOT NULL DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_traces_session_id ON traces(session_id);
+            CREATE INDEX IF NOT EXISTS idx_traces_created_at ON traces(created_at);
         """)
         await db.commit()
