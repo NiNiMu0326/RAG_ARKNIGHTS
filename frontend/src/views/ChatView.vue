@@ -2,7 +2,7 @@
   <div class="chat-page">
     <div class="chat-main">
       <div class="chat-panel">
-        <div class="chat-messages" ref="messagesContainer">
+        <div class="chat-messages" ref="messagesContainer" @click="handleSourceClick">
           <div v-if="!sessionStore.currentSession || sessionStore.currentSession.messages?.length === 0" class="empty-state">
             <svg class="empty-state-icon" viewBox="0 0 100 100" style="width: 48px; height: 48px;">
               <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="2"/>
@@ -31,7 +31,7 @@
               <template v-else-if="msg.role === 'assistant'">
                 <div class="chat-bubble">
                   <div class="chat-role">Arknights RAG</div>
-                  <div class="chat-text">{{ escapeHtml(msg.content) }}</div>
+                  <div class="chat-text" v-html="renderMessageWithSources(msg.content, msg.sources)"></div>
                 </div>
                 <div class="chat-time">{{ formatTime(new Date(msg.timestamp)) }}</div>
               </template>
@@ -145,6 +145,34 @@
                               <div class="tool-detail-web-content">{{ item.content || item.message || item.error || '' }}</div>
                             </div>
                           </template>
+                          <template v-else-if="call.name === 'arknights_structured_query'">
+                            <div class="tool-detail-structured">
+                              <div class="tool-detail-sql" v-if="msg.results[call.id].data.sql">
+                                <code>{{ msg.results[call.id].data.sql }}</code>
+                              </div>
+                              <div class="tool-detail-error" v-if="msg.results[call.id].data.error">
+                                {{ msg.results[call.id].data.error }}
+                              </div>
+                              <div class="tool-detail-table-wrapper" v-if="msg.results[call.id].data.rows?.length > 0">
+                                <table class="tool-detail-table">
+                                  <thead>
+                                    <tr>
+                                      <th v-for="col in msg.results[call.id].data.columns" :key="col">{{ col }}</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    <tr v-for="(row, ri) in msg.results[call.id].data.rows" :key="ri">
+                                      <td v-for="col in msg.results[call.id].data.columns" :key="col">{{ row[col] }}</td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                                <div class="tool-detail-row-count">{{ msg.results[call.id].data.row_count }} 行结果</div>
+                              </div>
+                              <div class="tool-detail-empty" v-if="msg.results[call.id].data.rows?.length === 0 && !msg.results[call.id].data.error">
+                                无匹配结果
+                              </div>
+                            </div>
+                          </template>
                           <template v-else>
                             <pre>{{ formatToolResult(msg.results[call.id].data) }}</pre>
                           </template>
@@ -173,7 +201,7 @@
             <div class="chat-message assistant" v-if="currentAnswer">
               <div class="chat-bubble">
                 <div class="chat-role">Arknights RAG</div>
-                <div class="current-answer">{{ escapeHtml(currentAnswer) }}</div>
+                <div class="current-answer" v-html="renderMessageWithSources(currentAnswer, currentAnswerSources)"></div>
               </div>
             </div>
             <div class="chat-message assistant" v-if="!currentAnswer && !currentThinking">
@@ -254,21 +282,25 @@ import { ref, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watc
 import { useSessionStore } from '../stores/sessions'
 import { useQuickQuestionsStore } from '../stores/quickQuestions'
 import { useSettingsStore } from '../stores/settings'
+import { useSourceDrawerStore } from '../stores/sourceDrawer'
 import { api, formatTime, escapeHtml } from '../api'
 
 const sessionStore = useSessionStore()
 const quickQuestionsStore = useQuickQuestionsStore()
 const settingsStore = useSettingsStore()
+const sourceDrawerStore = useSourceDrawerStore()
 
 const inputText = ref('')
 const isLoading = ref(false)
 const currentAnswer = ref('')
 const expandedTools = ref([])
 const expandedThinking = ref([])
+
 const toolItemRefs = reactive({})
 const currentRound = ref(0)
 const currentThinking = ref('')
 const currentThinkingTimeMs = ref(0)
+const currentAnswerSources = ref(null)
 const thinkingStartTime = ref(0)
 const messagesContainer = ref(null)
 const messageQueue = ref([])
@@ -334,6 +366,7 @@ watch(() => sessionStore.currentSessionId, (newId, oldId) => {
       // Clear display refs but do NOT abort — the stream continues in background
       isLoading.value = false
       currentAnswer.value = ''
+      currentAnswerSources.value = null
       currentThinking.value = ''
       currentThinkingTimeMs.value = 0
     }
@@ -386,6 +419,95 @@ function formatToolResult(data) {
   if (data === null || data === undefined) return '无数据'
   if (typeof data === 'object') return JSON.stringify(data, null, 2)
   return String(data)
+}
+
+function renderMessageWithSources(content, messageSources) {
+  if (!content) return ''
+
+  // Escape HTML first for safety
+  let html = escapeHtml(content)
+
+  // Build a lookup from chunk_id → source data for web URLs
+  const sourceByChunkId = {}
+  const webSources = []
+  if (messageSources && Array.isArray(messageSources)) {
+    for (const s of messageSources) {
+      if (s.chunk_id) {
+        sourceByChunkId[s.chunk_id] = s
+      } else if (s.source_id === 'web' && s.url) {
+        webSources.push(s)
+      }
+    }
+  }
+  let webIndex = 0
+
+  // Parse and link source citations
+  // Match chunk_id patterns like (operators_0103_02) or (enemies_json_1587)
+  html = html.replace(
+    /\(([a-z]+_[a-z0-9_]+)\)/g,
+    (match, chunkId) => {
+      // Use collection from structured sources if available, else infer from prefix
+      let collection = inferCollection(chunkId, sourceByChunkId)
+
+      return `(<span class="source-link" data-chunk-id="${escapeHtml(chunkId)}" data-collection="${collection}" title="点击查看原文">${escapeHtml(chunkId)}</span>)`
+    }
+  )
+
+  // Make web source references clickable with actual URLs when available
+  html = html.replace(
+    /\(web\)/g,
+    () => {
+      const ws = webSources[webIndex]
+      webIndex++
+      if (ws && ws.url) {
+        return `(<span class="source-link source-link-web" data-url="${escapeHtml(ws.url)}" data-source-id="web" title="${escapeHtml(ws.title || '网页来源')}">网页来源</span>)`
+      }
+      return '(<span class="source-link source-link-web" data-source-id="web">网页来源</span>)'
+    }
+  )
+
+  return html
+}
+
+function handleSourceClick(event) {
+  const link = event.target.closest('.source-link')
+  if (!link) return
+  event.preventDefault()
+
+  const url = link.dataset.url
+  if (url) {
+    window.open(url, '_blank', 'noopener,noreferrer')
+    return
+  }
+
+  const chunkId = link.dataset.chunkId
+  const collection = link.dataset.collection
+  if (chunkId && collection) {
+    sourceDrawerStore.open({ chunk_id: chunkId, collection })
+  }
+}
+
+function inferCollection(chunkId, sourceLookup) {
+  if (!chunkId) return 'knowledge'
+  // First, check structured sources from answer_done for the correct collection
+  if (sourceLookup && sourceLookup[chunkId] && sourceLookup[chunkId].collection) {
+    return sourceLookup[chunkId].collection
+  }
+  // Knowledge collection (.txt files) — check specific prefixes FIRST
+  // to avoid being matched by broader prefixes below
+  if (chunkId.startsWith('operators_json_')) return 'knowledge'
+  if (chunkId.startsWith('enemies_json_')) return 'knowledge'
+  if (chunkId.startsWith('enemies_summary_')) return 'knowledge'
+  if (chunkId.startsWith('operators_summary_')) return 'knowledge'
+  if (chunkId.startsWith('char_summary_')) return 'knowledge'
+  if (chunkId.startsWith('story_summary_')) return 'knowledge'
+  if (chunkId.startsWith('knowledge_')) return 'knowledge'
+  if (chunkId.startsWith('gameplay_')) return 'knowledge'
+  if (chunkId.startsWith('memes_')) return 'knowledge'
+  // Operators and stories (.md files)
+  if (chunkId.startsWith('operators_')) return 'operators'
+  if (chunkId.startsWith('stories_')) return 'stories'
+  return 'knowledge'  // default
 }
 
 function toggleThinking(idx) {
@@ -476,6 +598,7 @@ async function sendMessage() {
     }
   })
   currentAnswer.value = ''
+  currentAnswerSources.value = null
   expandedTools.value = []
   expandedThinking.value = []
   currentThinking.value = ''
@@ -609,7 +732,13 @@ async function sendMessage() {
         }
         // Write complete answer; remove any partial answer the session-switch handler
         // may have saved (to avoid duplicate assistant messages)
-        sessionStore.replaceLastAssistantIfPartial(streamSessionId, cleanAnswer)
+        const eventSources = event.sources || []
+        sessionStore.replaceLastAssistantIfPartial(streamSessionId, cleanAnswer, {
+          sources: eventSources,
+          metrics: event.metrics || {},
+        })
+        // Keep sources for streaming answer display (before next tick clears it)
+        currentAnswerSources.value = eventSources
         currentAnswer.value = ''
         currentThinking.value = ''
         currentThinkingTimeMs.value = 0
@@ -676,6 +805,8 @@ function summarizeToolArgs(toolName, args) {
         : `实体: ${args.entity || ''}`
     case 'web_search':
       return `搜索: "${args.query || ''}"`
+    case 'arknights_structured_query':
+      return `SQL: "${(args.sql || '').substring(0, 60)}"`
     default:
       return JSON.stringify(args).substring(0, 80)
   }
@@ -686,6 +817,7 @@ function getToolIcon(name) {
     case 'arknights_rag_search': return '📚'
     case 'arknights_graphrag_search': return '🕸️'
     case 'web_search': return '🌐'
+    case 'arknights_structured_query': return '📊'
     default: return '🔧'
   }
 }
@@ -695,6 +827,7 @@ function getToolDisplayName(name) {
     case 'arknights_rag_search': return '知识库检索'
     case 'arknights_graphrag_search': return '图谱查询'
     case 'web_search': return '网络搜索'
+    case 'arknights_structured_query': return '结构化查询'
     default: return name
   }
 }
@@ -906,4 +1039,43 @@ function scrollToBottom() {
 .tool-detail-web-title a { color: var(--text-secondary); text-decoration: none; font-weight: 500; }
 .tool-detail-web-title a:hover { text-decoration: underline; }
 .tool-detail-web-content { font-size: 0.72rem; color: var(--text-secondary); line-height: 1.5; max-height: 120px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+
+/* Source citation links — in global (unscoped) style because v-html bypasses scoped CSS */
+
+/* Structured query results */
+.tool-detail-structured { display: flex; flex-direction: column; gap: var(--spacing-sm); }
+.tool-detail-sql { font-size: 0.72rem; margin-bottom: var(--spacing-xs); }
+.tool-detail-sql code { background: var(--bg-deep); color: var(--color-primary); padding: 2px 8px; border-radius: 4px; font-family: var(--font-mono); word-break: break-all; font-size: 0.7rem; }
+.tool-detail-error { font-size: 0.75rem; color: var(--color-error, #ff6b6b); }
+.tool-detail-table-wrapper { overflow-x: auto; max-height: 300px; overflow-y: auto; }
+.tool-detail-table { width: 100%; border-collapse: collapse; font-size: 0.72rem; }
+.tool-detail-table th { background: var(--bg-dark); color: var(--text-secondary); font-weight: 600; padding: 4px 8px; text-align: left; white-space: nowrap; position: sticky; top: 0; z-index: 1; }
+.tool-detail-table td { padding: 3px 8px; border-bottom: 1px solid var(--border-color); color: var(--text-secondary); white-space: nowrap; }
+.tool-detail-table tr:hover td { background: var(--bg-dark); }
+.tool-detail-row-count { font-size: 0.7rem; color: var(--text-dim); margin-top: var(--spacing-xs); text-align: right; }
+</style>
+
+<style>
+/* Source citation links — unscoped so v-html content gets styled */
+.source-link {
+  color: #58a6ff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1.5px;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+.source-link:hover {
+  color: #79c0ff;
+  text-decoration-color: #79c0ff;
+}
+.source-link-web {
+  color: #58a6ff;
+  text-decoration-style: dotted;
+}
+.source-tag-web {
+  color: #8ba3a0;
+  font-style: italic;
+  font-size: 0.9em;
+}
 </style>

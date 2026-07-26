@@ -13,7 +13,9 @@
 - **地址**：119.147.202.190:14602
 - **SSH**：`ssh root@119.147.202.190 -p 14602`
 - **密码**：LLll11..
+- **Web 访问**：http://ninimu.top:14606
 - **项目路径**：服务器上项目位于 `/srv/projects/arknights-rag/`
+- **后端端口**：8889（uvicorn），通过 Nginx 代理到 14606
 
 ## 架构
 
@@ -25,7 +27,7 @@
                                               流式输出回答 → 结束
 ```
 
-每轮 LLM 返回工具调用时并行执行，结果加入消息历史继续下一轮，直到模型认为信息充足或达到 max_rounds=8 上限。
+每轮 LLM 返回工具调用时并行执行，结果加入消息历史继续下一轮，直到模型认为信息充足或达到 max_rounds=15 上限。
 
 ### 三个工具（`backend/agent/tool_implementations.py`）
 
@@ -39,7 +41,7 @@
 
 ### 安全机制
 
-- max_rounds=8 硬限制
+- max_rounds=15 硬限制
 - `detect_loop()` 循环检测（最近 3 轮相同 tool_calls 即终止）
 - LLM 最大输出 token 限制
 
@@ -79,6 +81,7 @@
 | `deepseek.py` | OpenAI 兼容客户端：Chat Completion + Function Calling + SSE 流式 |
 | `siliconflow.py` | SiliconFlow API：嵌入（bge-m3）、重排（bge-reranker-v2-m3）、LLM |
 | `web_search.py` | 网络搜索：Tavily API 优先，DuckDuckGo HTML 解析兜底 |
+| `base.py` | 公共 HTTP 客户端工具：带重试和连接池的 requests Session |
 
 ### RAG 基础设施（`backend/rag/`）
 
@@ -159,6 +162,17 @@
 | `chunks/graphrag/entity_relations.json` | 知识图谱实体关系数据 |
 | `faiss_index/` | FAISS 向量索引持久化文件 |
 
+### 辅助脚本（`Scripts/`）
+
+| 文件 | 职责 |
+|------|------|
+| `scraper.py` | 网页爬虫脚本 |
+| `enemy_scraper.py` | 敌人数据爬取 |
+| `crawl_operator_images.py` | 干员图片爬取 |
+| `daily_sync.py` | 数据定时同步 |
+| `lore_sync.py` | 剧情/背景故事同步 |
+| `sync_prts.py` | PRTS Wiki 数据同步 |
+
 ## API 端点
 
 ### Agent
@@ -170,6 +184,7 @@
 | DELETE | `/agent/session/{id}` | 删除会话 |
 | GET | `/agent/models` | 可用 LLM 模型列表 |
 | GET | `/agent/stats` | 会话统计 |
+| GET | `/agent/debug/trace` | Agent 工具调用追踪（调试用） |
 
 ### 认证
 | 方法 | 路径 | 描述 |
@@ -254,6 +269,7 @@ Agent 流式对话使用以下 SSE 事件，按时间顺序：
 | 前端框架 | Vue 3（Composition API + script setup） |
 | 状态管理 | Pinia |
 | 构建工具 | Vite 5 |
+| 中文分词 | jieba（BM25 索引构建） |
 | 图谱可视化 | Cytoscape.js |
 
 ### 启动命令
@@ -299,6 +315,7 @@ git pull
 ```
 
 ### 注意事项
+- **Git 提交前必须征得用户同意**。不要自动提交改动，即使是为了部署到服务器。先告知用户改动内容，等用户确认后再执行 `git add` + `git commit`。用户可能需要在一次提交中包含多个修改。
 - 每次重要改动后必须 commit，commit message 使用中文描述
 - 推送到仓库后提醒用户到服务器执行 `git pull`，**拉取代码后必须重启 uvicorn 服务才能生效**
 - 重启命令：`ssh -p 14602 root@119.147.202.190 'pkill -f uvicorn; cd /srv/projects/arknights-rag && nohup python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8889 > /tmp/uvicorn.log 2>&1 &'`

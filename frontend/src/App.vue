@@ -12,6 +12,7 @@
     </main>
     <SettingsModal @openAuth="openAuthModal" />
     <AuthModal ref="authModal" />
+    <SourceDrawer />
     <Toast />
   </div>
 </template>
@@ -24,6 +25,7 @@ import AppSidebar from './components/AppSidebar.vue'
 import AppHeader from './components/AppHeader.vue'
 import SettingsModal from './components/SettingsModal.vue'
 import AuthModal from './components/AuthModal.vue'
+import SourceDrawer from './components/SourceDrawer.vue'
 import Toast from './components/Toast.vue'
 
 const settingsStore = useSettingsStore()

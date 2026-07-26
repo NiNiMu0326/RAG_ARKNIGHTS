@@ -50,3 +50,9 @@ def get_bm25_index_path(collection_name: str) -> str:
 #   LANGCHAIN_TRACING_V2=true
 #   LANGCHAIN_API_KEY=your_key
 #   LANGCHAIN_PROJECT=arknights-rag
+
+# LangFuse Observability (optional)
+LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
+LANGFUSE_HOST = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")  # or self-hosted URL
+LANGFUSE_ENABLED = bool(LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY)
