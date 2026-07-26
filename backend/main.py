@@ -158,7 +158,7 @@ def _load_entity_relations() -> Dict:
             with open(ENTITY_RELATIONS_FILE, "r", encoding="utf-8") as f:
                 _entity_relations_cache = json.load(f)
         else:
-            _entity_relations_cache = {"entities": [], "relations": []}
+            _entity_relations_cache = {"entities": {}, "relations": []}
     return _entity_relations_cache
 
 
@@ -278,7 +278,7 @@ async def get_graph():
     """Get entity relations for knowledge graph (cached)."""
     data = _load_entity_relations()
     return EntityRelationData(
-        entities=data.get("entities", []),
+        entities=data.get("entities", {}),
         relations=data.get("relations", [])
     )
 
