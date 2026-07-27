@@ -53,6 +53,10 @@ jobs:
             cd frontend
             npm install
             npm run build
+            # 同步构建产物到 nginx 静态根目录（前端由 nginx 从 /var/www/arknights 直接伺服，
+            # 缺了这一步新前端永远不会生效，/agent 等 API 路径才走 uvicorn）
+            mkdir -p /var/www/arknights
+            rsync -a --delete /srv/projects/arknights-rag/frontend/dist/ /var/www/arknights/
 
       - name: SSH 停止旧服务
         uses: appleboy/ssh-action@v1
