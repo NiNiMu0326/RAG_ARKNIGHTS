@@ -36,9 +36,10 @@ jobs:
     needs: test # 测试通过才部署
     runs-on: ubuntu-latest
     steps:
-      # 分步执行：先构建，构建成功后才停旧服务，最后起新服务。
-      # 停止必须独立成一步——若与 nohup 启动同处一个脚本，脚本自身的命令行
-      # 会包含 "uvicorn" 文本，pkill -f 会把执行脚本的 shell 一起杀掉。
+      # 部署统一交给 systemd（arknights-rag.service，Restart=always）：
+      # 不用 pkill + nohup——会与 systemd 的自动重启冲突，产生两个 uvicorn 进程抢端口。
+      # git 用 fetch + reset --hard 而不是 pull：服务器上 cron 每日同步会改动
+      # Scripts/*_log.txt、npm install 会改动 package-lock.json，pull 必然冲突失败。
       - name: SSH 拉取代码并构建前端
         uses: appleboy/ssh-action@v1
         with:
@@ -49,7 +50,8 @@ jobs:
           script: |
             set -e
             cd /srv/projects/arknights-rag
-            git pull origin master
+            git fetch origin master
+            git reset --hard origin/master
             cd frontend
             npm install
             npm run build
@@ -58,7 +60,7 @@ jobs:
             mkdir -p /var/www/arknights
             rsync -a --delete /srv/projects/arknights-rag/frontend/dist/ /var/www/arknights/
 
-      - name: SSH 停止旧服务
+      - name: SSH 重启服务并健康检查
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -66,19 +68,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            pkill -f "[u]vicorn backend.main" || true
-            sleep 1
-
-      - name: SSH 启动新服务并健康检查
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          port: ${{ secrets.SERVER_PORT }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            cd /srv/projects/arknights-rag
-            nohup python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8889 > /tmp/uvicorn.log 2>&1 &
+            systemctl restart arknights-rag
             for i in $(seq 1 6); do
               curl -fsS http://localhost:8889/health && break
               sleep 5
