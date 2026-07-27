@@ -12,7 +12,7 @@
 
 - **地址**：119.147.202.190:14602
 - **SSH**：`ssh root@119.147.202.190 -p 14602`
-- **密码**：LLll11..
+- **密码**：已于 2026-07-27 轮换（旧密码曾明文提交到本仓库导致服务器被入侵，已弃用）。新密码不写入仓库，保存在本地密码管理器中
 - **Web 访问**：https://ninimu.top:14606（TLS 端口，明文 HTTP 会返回 400）
 - **项目路径**：服务器上项目位于 `/srv/projects/arknights-rag/`
 - **后端端口**：8889（uvicorn），通过 Nginx 代理到 14606
@@ -308,7 +308,7 @@ python backend/build_faiss_index.py
 ### 服务器信息
 - **地址**：119.147.202.190:14602
 - **SSH**：`ssh root@119.147.202.190 -p 14602`
-- **密码**：LLll11..
+- **密码**：已于 2026-07-27 轮换，不写入仓库（历史提交中的旧密码已失效）
 - **项目路径**：`/srv/projects/arknights-rag/`
 
 ### 应急手动部署（CI 不可用时）
@@ -321,6 +321,29 @@ cd frontend && npm install && npm run build && cd ..
 pkill -f uvicorn; sleep 1
 nohup python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8889 > /tmp/uvicorn.log 2>&1 &
 ```
+
+### 服务器 Git 代理镜像（insteadOf）
+
+服务器直连 GitHub 不稳定（间歇性 `Operation timed out` / `GnuTLS recv error`），已于 2026-07-26 在服务器全局 gitconfig 配置 gh-proxy 镜像加速：
+
+```bash
+# 已写入服务器 ~/.gitconfig
+git config --global url."https://gh-proxy.com/https://github.com/".insteadOf "https://github.com/"
+```
+
+效果：服务器上所有对 `github.com` 的 `git fetch/pull/clone` 请求被透明重写为 `https://gh-proxy.com/https://github.com/...`，由镜像代理转发。配置后实测 `git fetch` 约 0.5s。
+
+**排查注意**：若以后 `git pull` 报错信息中包含 `gh-proxy.com` 域名（DNS 解析失败、502 等），说明是**镜像服务失效**，而非仓库或部署流程问题。处理方式：
+
+```bash
+# 移除镜像，恢复直连
+git config --global --unset url."https://gh-proxy.com/https://github.com/".insteadOf
+
+# 如需更换镜像，先测速再配置：
+# time git ls-remote <镜像前缀>/https://github.com/NiNiMu0326/RAG_ARKNIGHTS.git HEAD
+```
+
+2026-07-26 测速参考：直连 0.6~2.7s（波动大、偶发超时），gh-proxy.com 稳定 0.5s；mirror.ghproxy.com（域名失效）与 gitclone.com（502）已不可用。
 
 ### 注意事项
 - **Git 提交前必须征得用户同意**。不要自动提交改动，即使是为了部署到服务器。先告知用户改动内容，等用户确认后再执行 `git add` + `git commit`。用户可能需要在一次提交中包含多个修改。
