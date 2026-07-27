@@ -12,6 +12,14 @@ from typing import Dict
 
 logger = logging.getLogger(__name__)
 
+# asyncio.to_thread 在 Python 3.9 才加入；服务器运行的是 3.8.10，此处提供兼容回退。
+if not hasattr(asyncio, "to_thread"):
+    async def _to_thread(func, *args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+
+    asyncio.to_thread = _to_thread
+
 _langfuse_client = None
 
 
